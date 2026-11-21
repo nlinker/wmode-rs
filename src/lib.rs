@@ -8,6 +8,7 @@
 #![allow(non_snake_case)]
 
 mod bwl;
+mod iat;
 mod ini;
 mod inject;
 mod log;
@@ -16,7 +17,9 @@ use log::log;
 
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{CloseHandle, HINSTANCE, TRUE};
-use windows_sys::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, GetModuleFileNameA};
+use windows_sys::Win32::System::LibraryLoader::{
+    DisableThreadLibraryCalls, GetModuleFileNameA, GetModuleHandleA,
+};
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows_sys::Win32::System::Threading::{CreateThread, Sleep};
 
@@ -26,6 +29,17 @@ const GAME_WINDOW_CLASS: &[u8] = b"SWarClass\0";
 const WINDOW_POLL_MS: u32 = 50;
 /// Window poll budget: 1200 x 50 ms = 60 s before giving up.
 const WINDOW_POLL_MAX_TRIES: u32 = 1200;
+
+/// Imports this DLL will redirect once the hooks land, as dll/function
+/// pairs checked in the game executable's import table.
+const GAME_IMPORTS: &[(&str, &str)] = &[
+    ("storm.dll", "SDrawLockSurface"),
+    ("storm.dll", "SDrawUnlockSurface"),
+    ("storm.dll", "SDrawUpdatePalette"),
+    ("user32.dll", "GetCursorPos"),
+    ("user32.dll", "SetCursorPos"),
+    ("user32.dll", "ClipCursor"),
+];
 
 /// DLL entry point. On attach, only inside the game process, it disables
 /// thread notifications and spawns the init thread. The launcher also loads
@@ -52,7 +66,8 @@ pub extern "system" fn DllMain(
 /// thread out of ChaosLauncher, which loads this DLL into itself too.
 fn host_exe_is_starcraft() -> bool {
     let mut buf = [0u8; 260];
-    let len = unsafe { GetModuleFileNameA(core::ptr::null_mut(), buf.as_mut_ptr(), buf.len() as u32) };
+    let len =
+        unsafe { GetModuleFileNameA(core::ptr::null_mut(), buf.as_mut_ptr(), buf.len() as u32) };
     if len == 0 || len as usize >= buf.len() {
         return false;
     }
@@ -79,6 +94,17 @@ fn spawn_init_thread() {
     }
 }
 
+/// Logs which of the hook-target imports exist in the game executable.
+fn log_game_imports() {
+    let exe = unsafe { GetModuleHandleA(core::ptr::null()) };
+    for (dll, func) in GAME_IMPORTS {
+        match unsafe { iat::find_import(exe, dll, func) } {
+            Some(slot) => log(&format!("init: import {dll}!{func} at {slot:p}")),
+            None => log(&format!("init: import {dll}!{func} NOT FOUND")),
+        }
+    }
+}
+
 /// Init thread body: waits for the game window to exist, then (once window
 /// management lands) subclasses it and installs the hooks. Returns 0, the
 /// thread exit code, in every case.
@@ -91,6 +117,7 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
         );
         if !hwnd.is_null() {
             log(&format!("init: game window found hwnd={hwnd:p}"));
+            log_game_imports();
             return 0;
         }
         Sleep(WINDOW_POLL_MS);
