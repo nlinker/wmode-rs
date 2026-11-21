@@ -6,7 +6,7 @@
      | |_| |_| |       | | | | | | | |___| | | |___| | | |_____
      |_________|       |_| |_| |_| |_______| |_______| |_______| v1.02
 
-     for StarCraft & BroodWar                       © XeN (2008)
+     for StarCraft & BroodWar                       Â© XeN (2008)
 
 
 W-MODE is a windowed mode plugin for all versions of StarCraft and BroodWar.
