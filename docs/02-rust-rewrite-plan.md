@@ -111,6 +111,16 @@ starts only after the review verdict — never auto-advance.
 | 13 | `WM_SIZING` min-size/snap, `DisableControls` extras (ALT+F4 block, screensaver), desktop clamp                 | manual checklist clean vs original                                                      |
 | 14 | `scripts\deploy.ps1` (build + copy `.bwl` into ChaosLauncher Plugins) + final parity checklist                 | one-command deploy; checklist signed off                                                |
 
+## Step notes (decisions taken during implementation)
+
+- Step 2: the StarCraft directory is found via the registry Game Path
+  (`HKCU\Software\Battle.net\Configuration`) first, else derived from this DLL's own location
+  (`<sc>\Chaoslauncher\Plugins\<name>.bwl`, three parents up). No `hinst` is stored: the module
+  handle is resolved on demand with `GetModuleHandleExA(FROM_ADDRESS)`, keeping `DllMain` a
+  pure no-op. Visibility inside the crate is plain `pub`, not `pub(crate)`.
+- Step 2: the ini template is the verbatim upstream sample (CRLF, all comments) plus the new
+  `SaveScale=1` key. Existing ini files are never overwritten by OpenConfig.
+
 ## Risks / open questions
 
 - **BWAPI interplay**: BWAPI's own W-Mode detects Xen W-Mode via `WS_SYSMENU` in the window

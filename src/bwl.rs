@@ -2,8 +2,12 @@
 //! Layout and semantics follow BWLauncher 4 (struct from BWAPI's
 //! BWAPI_PluginInjector chaoslauncher.h). The launcher loads this DLL in
 //! its own process and asks these exports what the plugin is.
+//! All plugin exports use the C (cdecl) convention on x86, matching the
+//! `extern "C" __declspec(dllexport)` declarations of existing plugins.
 
 use core::ffi::c_char;
+
+use windows_sys::Win32::Foundation::HANDLE;
 
 /// Launcher/plugin exchange structure, filled in by GetPluginAPI.
 #[repr(C)]
@@ -39,7 +43,7 @@ unsafe fn write_c_str(dst: *mut c_char, cap: usize, src: &[u8]) {
 /// Reports the plugin API version and the StarCraft build this plugin
 /// targets. API 4 with build 13 selects Brood War 1.16.1.
 #[no_mangle]
-pub unsafe extern "system" fn GetPluginAPI(data: *mut ExchangeData) {
+pub unsafe extern "C" fn GetPluginAPI(data: *mut ExchangeData) {
     if data.is_null() {
         return;
     }
@@ -53,7 +57,7 @@ pub unsafe extern "system" fn GetPluginAPI(data: *mut ExchangeData) {
 /// update URL. Buffer capacities 64 and 512 bytes per BWL4 usage, the
 /// update URL is left empty.
 #[no_mangle]
-pub unsafe extern "system" fn GetData(
+pub unsafe extern "C" fn GetData(
     name: *mut c_char,
     description: *mut c_char,
     updateurl: *mut c_char,
@@ -66,6 +70,20 @@ pub unsafe extern "system" fn GetData(
 /// Launcher Config button: creates wmode.ini from the template when the
 /// file does not exist yet, then opens it in the default text editor.
 #[no_mangle]
-pub extern "system" fn OpenConfig() -> i32 {
+pub extern "C" fn OpenConfig() -> i32 {
     crate::ini::open_config()
+}
+
+/// Called when StarCraft is already running. Not used: injection happens
+/// while the process is still suspended.
+#[no_mangle]
+pub extern "C" fn ApplyPatch(_hprocess: HANDLE, _reserved: u32) -> i32 {
+    1
+}
+
+/// Called while StarCraft.exe is suspended at startup: injects this DLL
+/// into the game process so it can install its hooks at startup.
+#[no_mangle]
+pub extern "C" fn ApplyPatchSuspended(hprocess: HANDLE, _reserved: u32) -> i32 {
+    crate::inject::apply_patch_suspended(hprocess)
 }
