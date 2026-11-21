@@ -46,7 +46,7 @@ pub unsafe extern "system" fn GetPluginAPI(data: *mut ExchangeData) {
     (*data).iPluginAPI = PLUGIN_API_VERSION;
     (*data).iStarCraftBuild = STARCRAFT_BUILD;
     (*data).bNotSCBWmodule = 0;
-    (*data).bConfigDialog = 0;
+    (*data).bConfigDialog = 1;
 }
 
 /// Fills launcher-provided buffers with the plugin name, description and
@@ -61,4 +61,11 @@ pub unsafe extern "system" fn GetData(
     write_c_str(name, 64, NAME);
     write_c_str(description, 512, DESCRIPTION);
     write_c_str(updateurl, 256, b"");
+}
+
+/// Launcher Config button: creates wmode.ini from the template when the
+/// file does not exist yet, then opens it in the default text editor.
+#[no_mangle]
+pub extern "system" fn OpenConfig() -> i32 {
+    crate::ini::open_config()
 }

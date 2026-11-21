@@ -40,6 +40,8 @@ real payload into the (suspended) StarCraft process. Exports, all `extern "syste
 | `ApplyPatch`          | `fn(HANDLE, u32) -> i32`                                   | no-op, return 1 (process already running path — unused for us).                                                                                                                                              |
 | `ApplyPatchSuspended` | `fn(HANDLE, u32) -> i32`                                   | inject **our own DLL path** into suspended `StarCraft.exe`: `VirtualAllocEx` MAX_PATH → `WriteProcessMemory` → `CreateRemoteThread(LoadLibraryA)` → wait, check exit code (chaoslauncher.cpp:50-93 pattern). |
 
+Field names keep the upstream camelCase (`iPluginAPI`): the struct ABI is positional, names never enter the binary, and mirroring `chaoslauncher.h` eases review (`#![allow(non_snake_case)]` covers the lint). Only the export names above are exact-match.
+
 Build artifact renamed `target\i686-pc-windows-msvc\release\wmode_rs.dll` → `wmode-rs.bwl`
 in the ChaosLauncher `Plugins\` folder. Keep original `wmode.bwl` alongside until parity.
 
