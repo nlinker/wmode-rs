@@ -1,0 +1,10 @@
+# Ghidra project + decompilation output (regenerable via scripts\decompile-wmode.ps1)
+gproj/
+decomp/
+tmp/
+
+# IDE
+.idea/
+
+# Rust build output
+/target
