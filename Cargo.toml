@@ -1,0 +1,30 @@
+[package]
+name = "wmode-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Rust rewrite of W-MODE v1.02, windowed-mode plugin for StarCraft: Brood War 1.16.1 (ChaosLauncher/BWL4)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "wmode_rs"
+crate-type = ["cdylib"]
+
+[dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+]
+
+[profile.release]
+# small and static, this DLL is injected into a game process
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
