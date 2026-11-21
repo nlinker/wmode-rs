@@ -1,6 +1,5 @@
-//! Diagnostic log channel: appends to %TEMP%\wmode-rs.log. Usable from both
-//! the launcher process (during ApplyPatchSuspended) and the injected game
-//! process, both resolve the same per-user TEMP directory.
+//! Diagnostic log: appends to %TEMP%\wmode-rs.log, from both the launcher
+//! and the injected game process.
 
 pub fn log(msg: &str) {
     use std::io::Write;

@@ -1,6 +1,4 @@
 //! Import Address Table walking and patching for loaded PE modules.
-//! Used to redirect the game's imports (storm.dll SDraw functions and the
-//! user32 cursor trio) into this DLL.
 
 use core::ffi::c_void;
 
@@ -9,44 +7,38 @@ use windows_sys::Win32::System::Memory::VirtualProtect;
 
 const DOS_MAGIC: u16 = 0x5A4D;
 const PE_MAGIC: u32 = 0x4550;
-/// Index of the import table in the optional header data directories.
+/// Data directory index of the import table.
 const DIR_IMPORT: usize = 1;
 /// Size of one IMAGE_IMPORT_DESCRIPTOR.
 const DESCRIPTOR_SIZE: usize = 20;
-/// Thunk bit set when the entry imports by ordinal, not by name.
+/// Thunk bit set for imports by ordinal.
 const ORDINAL_FLAG: u32 = 0x8000_0000;
 
-/// One import of a module: owning DLL, function name and the IAT slot
-/// currently holding its resolved address.
+/// One import: owning DLL, function name, IAT slot address.
 pub struct ImportEntry {
     pub dll: String,
     pub func: String,
     pub address: *mut c_void,
 }
 
-/// Reads unaligned little-endian values at `base + off`.
 unsafe fn read_at<T: Copy>(base: *const u8, off: usize) -> T {
     (base.add(off) as *const T).read_unaligned()
 }
 
-/// Reads a NUL-terminated ASCII string at `base + off`.
 unsafe fn read_str(base: *const u8, off: usize) -> String {
     let mut end = off;
     while *base.add(end) != 0 {
         end += 1;
     }
-    let bytes = core::slice::from_raw_parts(base.add(off), end - off);
-    String::from_utf8_lossy(bytes).into_owned()
+    String::from_utf8_lossy(core::slice::from_raw_parts(base.add(off), end - off)).into_owned()
 }
 
 fn eq_ignore_case(a: &str, b: &str) -> bool {
     a.bytes().map(|x| x.to_ascii_lowercase()).eq(b.bytes().map(|x| x.to_ascii_lowercase()))
 }
 
-/// Walks the import table of a loaded module. Returns None when the module
-/// has no readable PE headers. The names come from the original
-/// name table when present, so entries stay meaningful after the loader
-/// has resolved the addresses.
+/// Walks the import table. Names come from the original name table when
+/// present, so entries stay meaningful after loader resolution.
 pub unsafe fn imports(module: HMODULE) -> Option<Vec<ImportEntry>> {
     let base = module as *const u8;
     if read_at::<u16>(base, 0) != DOS_MAGIC {
@@ -82,11 +74,10 @@ pub unsafe fn imports(module: HMODULE) -> Option<Vec<ImportEntry>> {
             }
             let name_rva2 = read_at::<u32>(base, name_thunk);
             if name_rva2 & ORDINAL_FLAG == 0 {
-                // skip the 2-byte import hint before the name
-                let func = read_str(base, name_rva2 as usize + 2);
+                // name follows a 2-byte hint
                 entries.push(ImportEntry {
                     dll: dll.clone(),
-                    func,
+                    func: read_str(base, name_rva2 as usize + 2),
                     address: base.add(thunk) as *mut c_void,
                 });
             }
@@ -109,11 +100,9 @@ pub unsafe fn find_import(module: HMODULE, dll: &str, func: &str) -> Option<*mut
     })
 }
 
-/// Replaces the IAT slot of one import with `replacement`, making the page
-/// writable for the write and restoring its protection afterwards. Returns
-/// the number of slots patched (0 or 1).
-/// Not wired into the runtime path yet, the hook installation uses it when
-/// the render and cursor hooks land. Unit-tested until then.
+/// Replaces one IAT slot with `replacement`, restoring page protection.
+/// Returns the number of slots patched (0 or 1). Runtime wiring happens with
+/// the render and cursor hooks, unit-tested until then.
 #[allow(dead_code)]
 pub unsafe fn patch_import(
     module: HMODULE,
@@ -156,7 +145,7 @@ mod tests {
     #[test]
     fn own_module_has_imports_with_resolved_addresses() {
         let entries = unsafe { imports(own_module()) }.expect("own module imports");
-        assert!(!entries.is_empty(), "import table should not be empty");
+        assert!(!entries.is_empty());
         for e in &entries {
             assert!(!e.dll.is_empty());
             assert!(!e.func.is_empty());
@@ -176,10 +165,7 @@ mod tests {
 
     #[test]
     fn find_import_missing_returns_none() {
-        assert_eq!(
-            unsafe { find_import(own_module(), "does_not_exist.dll", "Nope") },
-            None
-        );
+        assert_eq!(unsafe { find_import(own_module(), "does_not_exist.dll", "Nope") }, None);
     }
 
     #[test]
@@ -191,13 +177,12 @@ mod tests {
             .iter()
             .find(|e| e.dll.to_ascii_lowercase().contains("kernel32"))
             .expect("test binary imports from kernel32");
-        let original = unsafe { (sample.address as *const u32).read_unaligned() };
-        let patched = unsafe { patch_import(h, &sample.dll, &sample.func, fake as usize as _) };
-        assert_eq!(patched, 1, "exactly one slot should be patched");
-        let now = unsafe { (sample.address as *const u32).read_unaligned() };
-        assert_eq!(now, fake as usize as u32);
+        let read_slot =
+            |a: *mut c_void| unsafe { (a as *const u32).read_unaligned() };
+        let original = read_slot(sample.address);
+        assert_eq!(unsafe { patch_import(h, &sample.dll, &sample.func, fake as usize as _) }, 1);
+        assert_eq!(read_slot(sample.address), fake as usize as u32);
         unsafe { patch_import(h, &sample.dll, &sample.func, original as _) };
-        let restored = unsafe { (sample.address as *const u32).read_unaligned() };
-        assert_eq!(restored, original);
+        assert_eq!(read_slot(sample.address), original);
     }
 }

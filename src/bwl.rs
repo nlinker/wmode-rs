@@ -1,9 +1,6 @@
-//! BWL4 plugin contract for ChaosLauncher and compatible launchers.
-//! Layout and semantics follow BWLauncher 4 (struct from BWAPI's
-//! BWAPI_PluginInjector chaoslauncher.h). The launcher loads this DLL in
-//! its own process and asks these exports what the plugin is.
-//! All plugin exports use the C (cdecl) convention on x86, matching the
-//! `extern "C" __declspec(dllexport)` declarations of existing plugins.
+//! BWL4 plugin contract for ChaosLauncher. Layout follows BWAPI's
+//! BWAPI_PluginInjector chaoslauncher.h. Exports use the C (cdecl)
+//! convention on x86, like every existing plugin.
 
 use core::ffi::c_char;
 

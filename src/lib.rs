@@ -1,9 +1,8 @@
 //! wmode-rs, a Rust rewrite of W-MODE v1.02 (XeNotRoN, 2008).
 //!
 //! Windowed-mode plugin for StarCraft: Brood War 1.16.1, loaded as a
-//! ChaosLauncher (BWL4) plugin. Alt+F9 cycles window scale 1x -> 1.5x -> 2x
-//! (the feature that started this rewrite). Everything else mirrors the
-//! original per `wmode\WModeReadme.txt`.
+//! ChaosLauncher (BWL4) plugin. Alt+F9 cycles window scale 1x -> 1.5x -> 2x.
+//! Everything else mirrors the original per `wmode\WModeReadme.txt`.
 
 #![allow(non_snake_case)]
 
@@ -25,13 +24,10 @@ use windows_sys::Win32::System::Threading::{CreateThread, Sleep};
 
 /// StarCraft 1.16.1 main window class.
 const GAME_WINDOW_CLASS: &[u8] = b"SWarClass\0";
-/// Window poll interval in milliseconds.
 const WINDOW_POLL_MS: u32 = 50;
-/// Window poll budget: 1200 x 50 ms = 60 s before giving up.
-const WINDOW_POLL_MAX_TRIES: u32 = 1200;
+const WINDOW_POLL_MAX_TRIES: u32 = 1200; // 60 s
 
-/// Imports this DLL will redirect once the hooks land, as dll/function
-/// pairs checked in the game executable's import table.
+/// Imports this DLL will redirect, as dll/function pairs.
 const GAME_IMPORTS: &[(&str, &str)] = &[
     ("storm.dll", "SDrawLockSurface"),
     ("storm.dll", "SDrawUnlockSurface"),
@@ -41,12 +37,10 @@ const GAME_IMPORTS: &[(&str, &str)] = &[
     ("user32.dll", "ClipCursor"),
 ];
 
-/// DLL entry point. On attach, only inside the game process, it disables
-/// thread notifications and spawns the init thread. The launcher also loads
-/// this DLL into itself, where everything must stay dormant. Nothing else
-/// runs here: the loader-lock rule forbids library, window and COM calls
-/// from DllMain, and the spawned thread only starts executing once DllMain
-/// has returned.
+/// DLL entry point. Only inside the game process: disables thread
+/// notifications and spawns the init thread. The launcher loads this DLL
+/// into itself too, where it must stay dormant. Loader-lock rule: nothing
+/// else runs here, the spawned thread starts once DllMain has returned.
 #[no_mangle]
 pub extern "system" fn DllMain(
     hinst: HINSTANCE,
@@ -62,8 +56,7 @@ pub extern "system" fn DllMain(
     TRUE
 }
 
-/// Whether the hosting process executable is StarCraft.exe. Keeps the init
-/// thread out of ChaosLauncher, which loads this DLL into itself too.
+/// Whether the host EXE is StarCraft.exe.
 fn host_exe_is_starcraft() -> bool {
     let mut buf = [0u8; 260];
     let len =
@@ -75,7 +68,7 @@ fn host_exe_is_starcraft() -> bool {
     exe.ends_with("\\starcraft.exe")
 }
 
-/// Starts the init thread and drops its handle immediately.
+/// Starts the init thread and drops its handle.
 fn spawn_init_thread() {
     let thread = unsafe {
         CreateThread(
@@ -105,9 +98,8 @@ fn log_game_imports() {
     }
 }
 
-/// Init thread body: waits for the game window to exist, then (once window
-/// management lands) subclasses it and installs the hooks. Returns 0, the
-/// thread exit code, in every case.
+/// Init thread: waits for the game window, then (once window management
+/// lands) subclasses it and installs the hooks.
 unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
     log("init: thread started, waiting for the game window");
     for _ in 0..WINDOW_POLL_MAX_TRIES {
