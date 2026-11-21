@@ -120,6 +120,23 @@ starts only after the review verdict — never auto-advance.
   pure no-op. Visibility inside the crate is plain `pub`, not `pub(crate)`.
 - Step 2: the ini template is the verbatim upstream sample (CRLF, all comments) plus the new
   `SaveScale=1` key. Existing ini files are never overwritten by OpenConfig.
+- Step 3: launcher-facing exports must be `extern "C"` (cdecl), not `extern "system"` (stdcall)
+  on x86. stdcall made ChaosLauncher (a Delphi app) crash on plugin query (APPCRASH, exception
+  `0x0eedfade`) because the callee popped arguments the caller expected to pop. `extern "system"`
+  remains correct for OS-contract entry points (`DllMain`) and later for Win32 hook replacements.
+- Step 3: injection outcome is logged to `%TEMP%\wmode-rs.log` (module path, `LoadLibraryA` exit
+  code). The remote thread's exit code is the HMODULE inside the game process, a stronger proof
+  of injection than module enumeration.
+- Step 3 (verification note): 64-bit PowerShell and `tasklist /m` cannot enumerate modules of
+  the 32-bit StarCraft process (WOW64 gap, empty `.Modules`). Verify from 32-bit PowerShell:
+  `& $env:windir\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command
+  "(Get-Process StarCraft).Modules | Where-Object ModuleName -like 'wmode*'"`.
+
+- Step 4: poll kept, `CreateWindowExA` IAT hook not needed (window reliably found within one
+  poll cycle after resume). The init thread is spawned only when the host EXE is
+  `StarCraft.exe` (`GetModuleFileNameA(NULL)` name check): the launcher also loads the plugin
+  into itself, and its copy must stay dormant, otherwise both processes race for the same
+  game window (duplicate HWND finds in the log).
 
 ## Risks / open questions
 

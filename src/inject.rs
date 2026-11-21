@@ -20,16 +20,6 @@ fn pcstr(bytes: &[u8]) -> PCSTR {
     bytes.as_ptr()
 }
 
-/// Appends one line to %TEMP%\wmode-rs.log (the launcher-side diagnostic
-/// channel, written from the ChaosLauncher process).
-fn log(msg: &str) {
-    use std::io::Write;
-    let path = std::env::temp_dir().join("wmode-rs.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{msg}");
-    }
-}
-
 /// Full path of this module as NUL-terminated bytes.
 fn module_path() -> Option<Vec<u8>> {
     let mut hmodule = core::ptr::null_mut();
@@ -76,15 +66,15 @@ fn local_load_library_a() -> Option<ThreadStartFn> {
 /// Returns 1 on success, 0 on failure.
 pub fn apply_patch_suspended(hprocess: HANDLE) -> i32 {
     let Some(path) = module_path() else {
-        log("ApplyPatchSuspended: own module path not found");
+        crate::log::log("ApplyPatchSuspended: own module path not found");
         return 0;
     };
     let path_text = String::from_utf8_lossy(&path[..path.len() - 1]).into_owned();
     let Some(load_library_a) = local_load_library_a() else {
-        log("ApplyPatchSuspended: LoadLibraryA not resolved");
+        crate::log::log("ApplyPatchSuspended: LoadLibraryA not resolved");
         return 0;
     };
-    log(&format!("ApplyPatchSuspended: injecting {path_text}"));
+    crate::log::log(&format!("ApplyPatchSuspended: injecting {path_text}"));
     unsafe {
         let remote = VirtualAllocEx(
             hprocess,
@@ -127,7 +117,7 @@ pub fn apply_patch_suspended(hprocess: HANDLE) -> i32 {
         let mut exit_code = 0u32;
         GetExitCodeThread(thread, &mut exit_code);
         CloseHandle(thread);
-        log(&format!(
+        crate::log::log(&format!(
             "ApplyPatchSuspended: LoadLibraryA exit code {exit_code} ({})",
             if exit_code == 0 { "FAILED" } else { "loaded" }
         ));
