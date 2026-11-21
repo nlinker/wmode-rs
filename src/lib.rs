@@ -7,6 +7,8 @@
 
 #![allow(non_snake_case)]
 
+mod bwl;
+
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{HINSTANCE, TRUE};
 
