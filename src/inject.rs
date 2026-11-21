@@ -1,6 +1,7 @@
 //! Injection of this DLL into the suspended StarCraft process, using the
 //! CreateRemoteThread(LoadLibraryA) pattern standard for BWL4 plugins.
 
+use crate::log::log;
 use windows_sys::core::PCSTR;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
@@ -66,15 +67,15 @@ fn local_load_library_a() -> Option<ThreadStartFn> {
 /// Returns 1 on success, 0 on failure.
 pub fn apply_patch_suspended(hprocess: HANDLE) -> i32 {
     let Some(path) = module_path() else {
-        crate::log::log("ApplyPatchSuspended: own module path not found");
+        log("ApplyPatchSuspended: own module path not found");
         return 0;
     };
     let path_text = String::from_utf8_lossy(&path[..path.len() - 1]).into_owned();
     let Some(load_library_a) = local_load_library_a() else {
-        crate::log::log("ApplyPatchSuspended: LoadLibraryA not resolved");
+        log("ApplyPatchSuspended: LoadLibraryA not resolved");
         return 0;
     };
-    crate::log::log(&format!("ApplyPatchSuspended: injecting {path_text}"));
+    log(&format!("ApplyPatchSuspended: injecting {path_text}"));
     unsafe {
         let remote = VirtualAllocEx(
             hprocess,
@@ -117,7 +118,7 @@ pub fn apply_patch_suspended(hprocess: HANDLE) -> i32 {
         let mut exit_code = 0u32;
         GetExitCodeThread(thread, &mut exit_code);
         CloseHandle(thread);
-        crate::log::log(&format!(
+        log(&format!(
             "ApplyPatchSuspended: LoadLibraryA exit code {exit_code} ({})",
             if exit_code == 0 { "FAILED" } else { "loaded" }
         ));

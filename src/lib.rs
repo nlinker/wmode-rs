@@ -12,6 +12,8 @@ mod ini;
 mod inject;
 mod log;
 
+use log::log;
+
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{CloseHandle, HINSTANCE, TRUE};
 use windows_sys::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, GetModuleFileNameA};
@@ -81,18 +83,18 @@ fn spawn_init_thread() {
 /// management lands) subclasses it and installs the hooks. Returns 0, the
 /// thread exit code, in every case.
 unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
-    log::log("init: thread started, waiting for the game window");
+    log("init: thread started, waiting for the game window");
     for _ in 0..WINDOW_POLL_MAX_TRIES {
         let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::FindWindowA(
             GAME_WINDOW_CLASS.as_ptr(),
             core::ptr::null(),
         );
         if !hwnd.is_null() {
-            log::log(&format!("init: game window found hwnd={hwnd:p}"));
+            log(&format!("init: game window found hwnd={hwnd:p}"));
             return 0;
         }
         Sleep(WINDOW_POLL_MS);
     }
-    log::log("init: game window not found after 60 s, giving up");
+    log("init: game window not found after 60 s, giving up");
     0
 }
