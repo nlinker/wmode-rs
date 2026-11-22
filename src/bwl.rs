@@ -71,16 +71,45 @@ pub extern "C" fn OpenConfig() -> i32 {
     crate::ini::open_config()
 }
 
-/// Called when StarCraft is already running. Not used: injection happens
-/// while the process is still suspended.
+/// Called when StarCraft is already running and its window exists: the
+/// game has consumed the storm Window Mode flag by now, the previous
+/// registry value can go back.
 #[no_mangle]
 pub extern "C" fn ApplyPatch(_hprocess: HANDLE, _reserved: u32) -> i32 {
+    let saved = SAVED_WINDOW_MODE.lock().unwrap().take();
+    if saved.is_some() {
+        crate::set_storm_window_mode(saved);
+        crate::log::log("bwl: registry Window Mode restored");
+    }
     1
 }
 
-/// Called while StarCraft.exe is suspended at startup: injects this DLL
-/// into the game process so it can install its hooks at startup.
+/// Window Mode value seen before the game started, restored by ApplyPatch.
+static SAVED_WINDOW_MODE: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+
+/// Called while StarCraft.exe is suspended at startup: sets the storm
+/// Window Mode flag (the game reads it while creating its window, a
+/// fullscreen-exclusive DirectDraw setup never happens) and injects this
+/// DLL into the game process.
 #[no_mangle]
 pub extern "C" fn ApplyPatchSuspended(hprocess: HANDLE, _reserved: u32) -> i32 {
-    crate::inject::apply_patch_suspended(hprocess)
+    let previous = crate::storm_window_mode();
+    crate::set_storm_window_mode(Some(1));
+    *SAVED_WINDOW_MODE.lock().unwrap() = previous;
+    crate::log::log("bwl: registry Window Mode set to 1");
+    let rc = crate::inject::apply_patch_suspended(hprocess);
+    // wait for the in-game side to report readiness through the shared log
+    // (the flag lives in another process, the log file is common ground)
+    let marker = "res: hooks installed";
+    let log_path = std::env::temp_dir().join("wmode-rs.log");
+    for _ in 0..600 {
+        if let Ok(text) = std::fs::read_to_string(&log_path) {
+            if text.contains(marker) {
+                crate::log::log("bwl: in-game hooks confirmed ready");
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    rc
 }

@@ -6,10 +6,11 @@ use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcA, DefWindowProcA, SetWindowLongA, GWL_WNDPROC,
+    CallWindowProcA, DefWindowProcA, SetWindowLongA, GWL_WNDPROC, WM_DISPLAYCHANGE, WM_PAINT,
 };
 
 use crate::log::log;
+use crate::render;
 
 /// Original window procedure. SetWindowLongA flavor (i32, x86-safe).
 static ORIGINAL_PROC: AtomicI32 = AtomicI32::new(0);
@@ -42,6 +43,15 @@ unsafe extern "system" fn our_wnd_proc(
     if budget > 0 {
         LOG_BUDGET.store(budget - 1, Ordering::Relaxed);
         log(&format!("window: msg {msg:#06x}"));
+    }
+    if msg == WM_DISPLAYCHANGE {
+        // lParam packs the new size: low word width, high word height
+        let w = (lparam & 0xFFFF) as u16;
+        let h = ((lparam >> 16) & 0xFFFF) as u16;
+        log(&format!("window: WM_DISPLAYCHANGE {w}x{h} depth={wparam}"));
+    }
+    if msg == WM_PAINT && render::windowed() {
+        render::paint(hwnd);
     }
     let old = ORIGINAL_PROC.load(Ordering::Acquire);
     if old != 0 {

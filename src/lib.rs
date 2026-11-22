@@ -7,13 +7,17 @@
 #![allow(non_snake_case)]
 
 mod bwl;
+mod ddraw;
+mod hooks;
 mod iat;
 mod ini;
 mod inject;
 mod log;
+mod render;
 mod window;
 
 use log::log;
+
 
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{CloseHandle, HINSTANCE, TRUE};
@@ -21,6 +25,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     DisableThreadLibraryCalls, GetModuleFileNameA, GetModuleHandleA,
 };
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
+use windows_sys::Win32::UI::WindowsAndMessaging::{SM_CXSCREEN, SM_CYSCREEN};
 use windows_sys::Win32::System::Threading::{CreateThread, Sleep};
 
 /// StarCraft 1.16.1 main window class.
@@ -104,10 +109,150 @@ fn log_game_imports() {
     }
 }
 
-/// Init thread: waits for the game window, then (once window management
-/// lands) subclasses it and installs the hooks.
+/// storm.dll reads this registry value on startup: nonzero makes it create
+/// a plain cooperative (DDSCL_NORMAL) window of the requested size instead
+/// of a fullscreen exclusive one, so the desktop mode never changes.
+const STORM_INTERNAL_KEY: &[u8] = b"Software\\Blizzard Entertainment\\Internal\0";
+const STORM_WINDOW_MODE: &[u8] = b"Window Mode\0";
+
+fn storm_window_mode() -> Option<u32> {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExA, RegQueryValueExA, HKEY_CURRENT_USER, KEY_QUERY_VALUE,
+        REG_DWORD,
+    };
+    unsafe {
+        let mut key = core::ptr::null_mut();
+        if RegOpenKeyExA(
+            HKEY_CURRENT_USER,
+            STORM_INTERNAL_KEY.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut key,
+        ) != 0
+        {
+            return None;
+        }
+        let mut value = 0u32;
+        let mut size = 4u32;
+        let mut kind = 0u32;
+        let ok = RegQueryValueExA(
+            key,
+            STORM_WINDOW_MODE.as_ptr(),
+            core::ptr::null_mut(),
+            &mut kind,
+            &mut value as *mut u32 as _,
+            &mut size,
+        );
+        RegCloseKey(key);
+        if ok == 0 && kind == REG_DWORD {
+            Some(value)
+        } else {
+            None
+        }
+    }
+}
+
+fn set_storm_window_mode(value: Option<u32>) {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyExA, RegDeleteValueA, RegSetValueExA, HKEY_CURRENT_USER,
+        KEY_SET_VALUE, REG_DWORD, REG_OPTION_NON_VOLATILE,
+    };
+    unsafe {
+        let mut key = core::ptr::null_mut();
+        if RegCreateKeyExA(
+            HKEY_CURRENT_USER,
+            STORM_INTERNAL_KEY.as_ptr(),
+            0,
+            core::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            core::ptr::null(),
+            &mut key,
+            core::ptr::null_mut(),
+        ) != 0
+        {
+            return;
+        }
+        match value {
+            Some(v) => {
+                RegSetValueExA(
+                    key,
+                    STORM_WINDOW_MODE.as_ptr(),
+                    0,
+                    REG_DWORD,
+                    &v as *const u32 as _,
+                    4,
+                );
+            }
+            None => {
+                RegDeleteValueA(key, STORM_WINDOW_MODE.as_ptr());
+            }
+        }
+        RegCloseKey(key);
+    }
+}
+
+/// Current screen size for the diagnostic log.
+fn screen_size() -> (i32, i32) {
+    unsafe {
+        (
+            windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SM_CXSCREEN),
+            windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SM_CYSCREEN),
+        )
+    }
+}
+
+fn log_res(context: &str) {
+    let (cx, cy) = screen_size();
+    log(&format!("res: {context} {cx}x{cy}"));
+}
+
+/// Watches the screen size for the first minute and logs every change, to
+/// pinpoint when and from what the display mode flips.
+unsafe extern "system" fn res_watcher(_param: *mut core::ffi::c_void) -> u32 {
+    let (mut cx, mut cy) = screen_size();
+    for _ in 0..600 {
+        Sleep(100);
+        ddraw::install_mode_guard();
+        let (nx, ny) = screen_size();
+        if nx != cx || ny != cy {
+            log(&format!("res: CHANGED {cx}x{cy} -> {nx}x{ny}"));
+            cx = nx;
+            cy = ny;
+        }
+    }
+    0
+}
+
+/// Init thread. Runs while the game main thread is still suspended (the
+/// launcher injects this DLL before resume), so the import patches land
+/// before the game can initialize video. Only the window-dependent part
+/// waits for the game window.
 unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
-    log("init: thread started, waiting for the game window");
+    log("init: thread started, installing hooks");
+    log_res("init start");
+    log_game_imports();
+    render::prepare();
+    if !hooks::install() {
+        log("init: render hooks FAILED, game left untouched");
+        return 0;
+    }
+    log_res("hooks installed");
+    let watcher = unsafe {
+        CreateThread(
+            core::ptr::null(),
+            0,
+            Some(res_watcher),
+            core::ptr::null(),
+            0,
+            core::ptr::null_mut(),
+        )
+    };
+    if !watcher.is_null() {
+        unsafe {
+            CloseHandle(watcher);
+        }
+    }
     for _ in 0..WINDOW_POLL_MAX_TRIES {
         let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::FindWindowA(
             GAME_WINDOW_CLASS.as_ptr(),
@@ -115,10 +260,11 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
         );
         if !hwnd.is_null() {
             log(&format!("init: game window found hwnd={hwnd:p}"));
-            log_game_imports();
+            log_res("window found");
             if !window::install(hwnd) {
                 log("init: window subclass FAILED");
             }
+            render::activate_window(hwnd);
             return 0;
         }
         Sleep(WINDOW_POLL_MS);
