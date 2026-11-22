@@ -4,18 +4,18 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::Mutex;
 
-use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC,
-    DeleteObject, EndPaint, GetDC, InvalidateRect, ReleaseDC, SelectObject, SetDIBColorTable,
-    SetStretchBltMode, StretchDIBits, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-    HALFTONE, HDC, HBITMAP, PAINTSTRUCT, PALETTEENTRY, RGBQUAD, SRCCOPY,
+    BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
+    GetDC, InvalidateRect, ReleaseDC, SelectObject, SetDIBColorTable, SetStretchBltMode,
+    StretchDIBits, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HALFTONE, HDC, HBITMAP,
+    PAINTSTRUCT, PALETTEENTRY, RGBQUAD, SRCCOPY,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetSystemMetrics, GetWindowRect, SetWindowLongA, SetWindowPos, GWL_STYLE,
-    HWND_NOTOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_NOMOVE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    WS_OVERLAPPEDWINDOW,
+    AdjustWindowRectEx, GetClientRect, GetSystemMetrics, GetWindowLongA, GetWindowRect,
+    SetWindowLongA, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, SM_CXSCREEN,
+    SM_CYSCREEN, SWP_NOMOVE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::log::log;
@@ -70,20 +70,20 @@ pub fn game_size() -> (i32, i32) {
     )
 }
 
-/// Total window size overhead: borders plus caption.
-unsafe fn border_size(hwnd: HWND) -> (i32, i32) {
-    let mut client = RECT::default();
-    let mut window = RECT::default();
-    GetClientRect(hwnd, &mut client);
-    GetWindowRect(hwnd, &mut window);
-    let mut tl = POINT { x: client.left, y: client.top };
-    let mut br = POINT { x: client.right, y: client.bottom };
-    ClientToScreen(hwnd, &mut tl);
-    ClientToScreen(hwnd, &mut br);
-    (
-        (window.right - window.left) - (br.x - tl.x),
-        (window.bottom - window.top) - (br.y - tl.y),
-    )
+/// Outer window size that yields a client of cw x ch under the window
+/// styles currently set. Computed from the style flags alone, the frame
+/// does not have to be applied to the window yet.
+unsafe fn outer_size_for(hwnd: HWND, cw: i32, ch: i32) -> (i32, i32) {
+    let style = GetWindowLongA(hwnd, GWL_STYLE) as u32;
+    let ex = GetWindowLongA(hwnd, GWL_EXSTYLE) as u32;
+    let mut r = RECT {
+        left: 0,
+        top: 0,
+        right: cw,
+        bottom: ch,
+    };
+    AdjustWindowRectEx(&mut r, style, 0, ex);
+    (r.right - r.left, r.bottom - r.top)
 }
 
 /// Creates the DIB surface for the given game size, replacing any previous
@@ -169,30 +169,21 @@ pub fn activate_window(hwnd: HWND) {
     GAME_HWND.store(hwnd, Ordering::Release);
     unsafe {
         SetWindowLongA(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW as i32);
-        let (bw, bh) = border_size(hwnd);
-        let w = width + bw;
-        let h = height + bh;
+        let (ow, oh) = outer_size_for(hwnd, width, height);
         let cx = GetSystemMetrics(SM_CXSCREEN);
         let cy = GetSystemMetrics(SM_CYSCREEN);
         SetWindowPos(
             hwnd,
             HWND_NOTOPMOST,
-            (cx - w) / 2,
-            (cy - h) / 2,
-            w,
-            h,
+            (cx - ow) / 2,
+            (cy - oh) / 2,
+            ow,
+            oh,
             SWP_SHOWWINDOW,
         );
     }
     WINDOWED.store(true, Ordering::Release);
     DIRTY.store(true, Ordering::Release);
-    // the first SetWindowPos above applied the new window frame, so the
-    // border is measurable now and the client can be brought to the game
-    // size right away instead of waiting for a WM_SIZE that may never
-    // come (an unchanged outer size sends no WM_SIZE at all)
-    unsafe {
-        correct_client_size(hwnd);
-    }
     let mut client = RECT::default();
     let mut outer = RECT::default();
     unsafe {
@@ -230,14 +221,14 @@ pub unsafe fn correct_client_size(hwnd: HWND) -> bool {
             client.right, client.bottom, outer.left, outer.top, outer.right, outer.bottom
         ));
     }
-    let (bw, bh) = border_size(hwnd);
+    let (ow, oh) = outer_size_for(hwnd, want_w, want_h);
     SetWindowPos(
         hwnd,
         core::ptr::null_mut(),
         0,
         0,
-        want_w + bw,
-        want_h + bh,
+        ow,
+        oh,
         SWP_NOMOVE | SWP_NOZORDER,
     );
     true
