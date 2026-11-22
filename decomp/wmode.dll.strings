@@ -1,0 +1,252 @@
+!W-MODE: Win32 required.
+kernel32
+Debugn
+ActiveProcess
+VirtualAll
+ateRemo
+dSVWh
+h@ih@=o
+tmTTT
+t8UQ4
+qy(kMAf
+/`;CW
+X@m@;
+<@rCT+:
+rS_W\
+;<$w#!W
+LibraryA
+ssModu
+leHand
+GMH a
+PAMFN
+ opening pl
+OutPf m
+X!damage 
+0Unkn
+r- lX
+"XeN'z XMOD V? s
+wmb[7BWL
+4AEC>
+C}WPM
+?XHDRu
+i7_eK
+b"gh>
+=#mpl
+`l A<J
+o9a$@
+m#W=J;
+:=DESC
++=URL 
+=AUTHu
+Resum
+ICClos2
+cVF<Na6
+mXSystemInfo
+WaKForS
+zObjW
+re{;P
+lseek
+trcatA
+6<;)V
+.text
+XPTPSW
+KERNEL32.DLL
+USER32.dll
+LoadLibraryA
+GetProcAddress
+VirtualProtect
+wsprintfA
+xmod2bwl.dll
+ApplyPatch
+ApplyPatchSuspended
+GetData
+GetPluginAPI
+OpenConfig
+W-MODEVER 
+1.02DESCH
+Windowed mode plugin for all versions of Original StarCraft and BroodWarAUTH
+XeNotRoNCONT
+xenomails|at|freemail|dot|huTIME
+January 4, 2008COMP
+BWProgrammersURL 
+USE 2
+Use a loader that is capable of XMOD loading.
+You can use BWL4 or scloader2b to load the plug with the -xmod parameter:
+scloader2b -xmod wmode.bwl
+The plugin can be placed anywhere but the wmode.ini configuration file will always be searched in your StarCraft directory. You can set the options of W-MODE in that file.
+A sample wmode.ini file with comments and default settings:
+(Default value applies when the key is not present in the config file.)
+[W-MODE]
+; What settings do you want to save when you exit StarCraft?
+; Save WindowClientX?
+; Default value: 1
+SaveWindowClientX=1
+; Save WindowClientY?
+; Default value: 1
+SaveWindowClientY=1
+; Save ClipCursor?
+; Default value: 0
+SaveClipCursor=0
+; Save EnableWindowMove?
+; Default value: 1
+SaveEnableWindowMove=1
+; Save AlwaysOnTop?
+; Default value: 1
+SaveAlwaysOnTop=1
+; Save DisableControls?
+; Default value: 1
+SaveDisableControls=1
+; X and Y coordinates of the StarCraft game screen.
+; (Upper left corner of client area.)
+; Default values: center the game screen on the desktop.
+; If you don't specify the WindowClientX value then
+; the window will be centered horizontally.
+; Omitting WindowClientY will cause the window to
+; be centered vertically.
+WindowClientX=30
+WindowClientY=30
+; Cursor clip (Toggle hotkey: ALT+F1)
+; Default value: 0
+ClipCursor=0
+; Enable window move (Toggle hotkey: ALT+F10)
+; Default value: 1
+EnableWindowMove=1
+; Enable always-on-top mode (Toggle hotkey: ALT+F11)
+; Default value: 0
+AlwaysOnTop=0
+; Disable all controls in the caption of the StarCraft
+; window. Disable the screensaver when the sc window is
+; active. Window can not be closed with ALT+F4.
+; (Toggle hotkey: ALT+F12)
+; Default value: 0
+DisableControls=0
+; Limit the maximum frame/sec to reach better performance.
+; This is extremely useful because during replays with
+; fastest x 4 speed the frame rate raises to the skies and
+; MaxFps limits to 100 the number of blits that require
+; 8bit -> desktop resolution conversion of the StarCraft
+; screen image.
+; Default and recommended value: 100
+; You can set it to higher value on faster machines.
+; Minimum value: 30 (less than 100 isn't recommended)
+MaxFps=100
+; Enables StarCraft to mute all sound when the main window
+; loses focus.
+; Default value: 0
+MuteNotFocused=0
+NeutralFILE
+wmode.bwl
+*5l\j
+9zU!t;
+CN'gI\
+^6pGS
+6Nyo-
+38l Tg
+z'Z#i
+cE`TC
+2p}uh
+PBta0n
+47NKs
+QV6pF[
+Gd?w!
+@H^~e
+?JG`-
+FQ!b}/Q
+EP'/i
+NxdZ{
+6}-Dn
+{lI{V
+QxA"(
+Bfcl^
+~XdDBl
+]<@=7,
+pq+>7T
+.DKV^
+ApqVf%
+vE0\h
+lDn>9
+fJ0j=g
+|.=O[
+GHZ(v
+6d@pc
+?ZN E
+nJzOT
+.:8OP
++%`L`
+9KzB|M-V
+1xMPh
+\kO$>
+-$&hl|
+jTtdi
+~e?&p
+6D%[y
+lDO;j
+%\KDv
+T*tQ&
+flX d
+jV,7{C=XB
+`S_t\N
+Ke>[Y.<g.]
+"V>,sr
+tw7T\
+*H^1k~
+G3`ANC
+hX/mx
+>=!gx
+7qrAL[
+MuYR|
+Zt/d+#sr
+)+q<DUn
+zWQ>`:
+/eKza|2F
+R>nV^
+0"v+]
+yr _W<2
+7$_OH
+8[_S"
+9.C)w
+BaY6w
+nV>Q3
+@Nrmr
+:IwERO
+MJ/+XSFo$
+~G1.1
+jhpO[g
+p|byBD
+8;xo|
+kA/M%
+tp9!J
++u|o[
+~?A-4
+08bV\U
+ET929
+>R2dD1
+'v${?rJ:
+<;zgw
+:rnCq
+@sDgG
+|*yL"
+[DsMq
+qI,;2Adq
+;=0=2
+xgRA(
+HT*+|
+cIt,#*"Uy
+8;>o|F
+OjN|+
+g6;"!)
+Z,YUz
+BSl?=
+ZdH{O
+b\3MfK
+"vWgu
+gu5~,
+=lBrp
+f:Pc2S
+Q%,si,
+:#cUVw
+EnLtL*4
+nnTl|
+EbOxG&*j
+;C/Y=xoT,8?>d~S
+"$XVt

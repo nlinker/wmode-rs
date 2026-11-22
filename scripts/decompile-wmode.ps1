@@ -7,8 +7,10 @@
   .dll name keeps the import clean), imports it into a local Ghidra project and
   dumps decompiled C for every function to decomp\wmode.dll.c via the bundled
   DecompileAll.java postScript. Also writes decomp\wmode.dll.strings (ASCII runs,
-  like `strings -n 5 | awk 'length<300'`) — hotkey hints, wmode.ini keys and
+  like `strings -n 5 | awk 'length<300'`) - hotkey hints, wmode.ini keys and
   error messages live there.
+
+  For storm.dll use scripts\decompile-storm.ps1 instead.
 
   Needs: Ghidra 12.1.4 + JDK 21, looked up in this order:
     1. -Ghidra / -Jdk parameters (or -ToolsRoot for a custom tools folder)
@@ -64,7 +66,7 @@ Download and extract into $ToolsRoot`:
 
   # JDK 21 (Adoptium Temurin, Windows x64 zip)
   Invoke-WebRequest https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse -OutFile jdk21.zip
-  Expand-Archive jdk21.zip "$ToolsRoot"        # renames to jdk-21.<vendor>.<ver> — matches jdk-21*
+  Expand-Archive jdk21.zip "$ToolsRoot"        # renames to jdk-21.<vendor>.<ver> - matches jdk-21*
 
   # Ghidra 12.1.4 (github.com/NationalSecurityAgency/ghidra/releases)
   Invoke-WebRequest https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.3.2_build/ghidra_12.1.4_PUBLIC_20251016.zip -OutFile ghidra.zip
@@ -104,7 +106,7 @@ if (-not $Force -and (Test-Path $out) -and (Get-Item $out).Length -gt 0) {
   Get-Content $log | Select-String 'functions=' | ForEach-Object { Write-Host "    $($_.Line)" }
 }
 
-# strings: ASCII runs len>=5, drop >=300 — hotkey/ini/error text for the ALT+F9 hunt
+# strings: ASCII runs len>=5, drop >=300 - hotkey/ini/error text for the ALT+F9 hunt
 $stringsOut = Join-Path $repo 'decomp\wmode.dll.strings'
 $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($dll))
 [regex]::Matches($text, '[\x20-\x7E]{5,}') |
