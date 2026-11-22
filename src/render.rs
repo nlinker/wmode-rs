@@ -14,7 +14,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::SystemInformation::GetTickCount;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetSystemMetrics, GetWindowRect, SetWindowLongA, SetWindowPos, GWL_STYLE,
-    HWND_NOTOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_SHOWWINDOW, WS_OVERLAPPEDWINDOW,
+    HWND_NOTOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_NOMOVE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    WS_OVERLAPPEDWINDOW,
 };
 
 use crate::log::log;
@@ -47,6 +48,8 @@ static GAME_W: AtomicI32 = AtomicI32::new(DEFAULT_WIDTH);
 static GAME_H: AtomicI32 = AtomicI32::new(DEFAULT_HEIGHT);
 static DIRTY: AtomicBool = AtomicBool::new(false);
 static LAST_PAINT_TICK: AtomicU32 = AtomicU32::new(0);
+/// How many client-size corrections get logged before going quiet.
+static CORRECT_LOG_BUDGET: AtomicU32 = AtomicU32::new(10);
 /// Minimum milliseconds between repaints.
 const PAINT_INTERVAL_MS: u32 = 20;
 
@@ -183,7 +186,61 @@ pub fn activate_window(hwnd: HWND) {
     }
     WINDOWED.store(true, Ordering::Release);
     DIRTY.store(true, Ordering::Release);
-    log(&format!("render: windowed mode active {width}x{height}"));
+    // the first SetWindowPos above applied the new window frame, so the
+    // border is measurable now and the client can be brought to the game
+    // size right away instead of waiting for a WM_SIZE that may never
+    // come (an unchanged outer size sends no WM_SIZE at all)
+    unsafe {
+        correct_client_size(hwnd);
+    }
+    let mut client = RECT::default();
+    let mut outer = RECT::default();
+    unsafe {
+        GetClientRect(hwnd, &mut client);
+        GetWindowRect(hwnd, &mut outer);
+    }
+    log(&format!(
+        "render: windowed mode active {width}x{height}, client {}x{}, window {} {} {} {}",
+        client.right, client.bottom, outer.left, outer.top, outer.right, outer.bottom
+    ));
+}
+
+/// Restores the client area to the game screen size. The game (or storm)
+/// keeps sizing the window to an outer 640x480, which the window frame
+/// eats into, so every WM_SIZE snaps the outer size back to game size
+/// plus frame. Returns true when a correction ran, false when the client
+/// already matched or the window is minimized or gone.
+pub unsafe fn correct_client_size(hwnd: HWND) -> bool {
+    let (want_w, want_h) = game_size();
+    let mut client = RECT::default();
+    GetClientRect(hwnd, &mut client);
+    if client.right == want_w && client.bottom == want_h {
+        return false;
+    }
+    if client.right <= 0 || client.bottom <= 0 {
+        return false;
+    }
+    let budget = CORRECT_LOG_BUDGET.load(Ordering::Relaxed);
+    if budget > 0 {
+        CORRECT_LOG_BUDGET.store(budget - 1, Ordering::Relaxed);
+        let mut outer = RECT::default();
+        GetWindowRect(hwnd, &mut outer);
+        log(&format!(
+            "render: correcting client {}x{} back to {want_w}x{want_h}, window {} {} {} {}",
+            client.right, client.bottom, outer.left, outer.top, outer.right, outer.bottom
+        ));
+    }
+    let (bw, bh) = border_size(hwnd);
+    SetWindowPos(
+        hwnd,
+        core::ptr::null_mut(),
+        0,
+        0,
+        want_w + bw,
+        want_h + bh,
+        SWP_NOMOVE | SWP_NOZORDER,
+    );
+    true
 }
 
 /// SDrawLockSurface: hands the game our DIB bits, recreating the surface

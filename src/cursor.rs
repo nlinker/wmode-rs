@@ -12,7 +12,7 @@ use windows_sys::Win32::Foundation::{FALSE, HWND, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ClipCursor, GetClientRect, GetCursorPos, SetCursorPos,
+    ClipCursor, GetClientRect, GetCursorPos, GetWindowRect, SetCursorPos,
 };
 
 use crate::iat;
@@ -28,6 +28,8 @@ static SET_OLD: AtomicU32 = AtomicU32::new(0);
 static CLIP_OLD: AtomicU32 = AtomicU32::new(0);
 /// Last clip rect the game asked for, in game coordinates.
 static CLIP_REQUEST: Mutex<Option<RECT>> = Mutex::new(None);
+/// How many clip calls get logged before the diagnostic goes quiet.
+static LOG_BUDGET: AtomicU32 = AtomicU32::new(20);
 
 /// Window geometry needed for translation, all in one snapshot.
 struct Map {
@@ -111,21 +113,49 @@ unsafe fn real_clip(rect: *const RECT) -> BOOL {
 /// to the client area, and applies it.
 unsafe fn apply_clip(rect: RECT) -> BOOL {
     if let Some(m) = mapping() {
+        // a pre-translated caller already anchors the rect at the client
+        // origin, strip that anchor or the origin lands in twice
+        let mut r = rect;
+        if r.left == m.ox && r.top == m.oy {
+            r.left = 0;
+            r.top = 0;
+            r.right -= m.ox;
+            r.bottom -= m.oy;
+        }
         let mut out = RECT {
-            left: m.ox + rect.left * m.cw / m.gw,
-            top: m.oy + rect.top * m.ch / m.gh,
-            right: m.ox + (rect.right * m.cw + m.gw - 1) / m.gw,
-            bottom: m.oy + (rect.bottom * m.ch + m.gh - 1) / m.gh,
+            left: m.ox + r.left * m.cw / m.gw,
+            top: m.oy + r.top * m.ch / m.gh,
+            right: m.ox + (r.right * m.cw + m.gw - 1) / m.gw,
+            bottom: m.oy + (r.bottom * m.ch + m.gh - 1) / m.gh,
         };
         out.left = out.left.max(m.ox);
         out.top = out.top.max(m.oy);
         out.right = out.right.min(m.ox + m.cw);
         out.bottom = out.bottom.min(m.oy + m.ch);
+        log_clip(&rect, &out, &m);
         if out.right > out.left && out.bottom > out.top {
             return real_clip(&out);
         }
     }
     real_clip(&rect)
+}
+
+/// One-shot diagnostic of the translation math.
+unsafe fn log_clip(req: &RECT, out: &RECT, m: &Map) {
+    let budget = LOG_BUDGET.load(Ordering::Relaxed);
+    if budget == 0 {
+        return;
+    }
+    LOG_BUDGET.store(budget - 1, Ordering::Relaxed);
+    let mut outer = RECT::default();
+    GetWindowRect(m.hwnd, &mut outer);
+    log(&format!(
+        "cursor: clip req {} {} {} {} -> {} {} {} {} client {}x{} game {}x{} origin {} {} window {} {} {} {}",
+        req.left, req.top, req.right, req.bottom,
+        out.left, out.top, out.right, out.bottom,
+        m.cw, m.ch, m.gw, m.gh, m.ox, m.oy,
+        outer.left, outer.top, outer.right, outer.bottom
+    ));
 }
 
 unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {

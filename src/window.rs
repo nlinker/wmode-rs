@@ -7,8 +7,10 @@ use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcA, DefWindowProcA, SetWindowLongA, GWL_WNDPROC, WM_DISPLAYCHANGE, WM_PAINT,
+    WM_SIZE, WM_WINDOWPOSCHANGED,
 };
 
+use crate::cursor;
 use crate::log::log;
 use crate::render;
 
@@ -52,6 +54,14 @@ unsafe extern "system" fn our_wnd_proc(
     }
     if msg == WM_PAINT && render::windowed() {
         render::paint(hwnd);
+    }
+    if (msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED) && render::windowed() {
+        if render::correct_client_size(hwnd) {
+            // the resize just changed the translation base, the applied
+            // clip rect is stale until the game asks again, so re-apply
+            // it right here
+            cursor::reclip();
+        }
     }
     let old = ORIGINAL_PROC.load(Ordering::Acquire);
     if old != 0 {
