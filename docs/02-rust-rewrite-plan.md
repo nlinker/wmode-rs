@@ -21,7 +21,7 @@ ALT+F9, which cycles window scale `1x → 1.5x → 2x → 1x` instead of togglin
     ini.rs              # wmode.ini read/save (from the StarCraft dir, Windows-1252 safe)
     ringbuf.rs          # lock-free SPSC for cross-thread state if needed (avoid if possible)
   scripts\ decomp\ docs\                            # first-party: tooling, dump, docs
-  wmode\                                               # original third-party drop — untouched
+  original\                                            # original third-party drop - untouched
 ```
 
 Toolchain: stable Rust, target `i686-pc-windows-msvc` (`rustup target add i686-pc-windows-msvc`).

@@ -2,7 +2,7 @@
 //!
 //! Windowed-mode plugin for StarCraft: Brood War 1.16.1, loaded as a
 //! ChaosLauncher (BWL4) plugin. Alt+F9 cycles window scale 1x -> 1.5x -> 2x.
-//! Everything else mirrors the original per `wmode\WModeReadme.txt`.
+//! Everything else mirrors the original per `original\WModeReadme.txt`.
 
 #![allow(non_snake_case)]
 

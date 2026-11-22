@@ -3,7 +3,7 @@
   Headless Ghidra decompilation of wmode.bwl (W-MODE v1.02, 32-bit x86 PE DLL).
 
 .DESCRIPTION
-  Copies ..\wmode\wmode.bwl to gproj\wmode.dll (Ghidra's PE loader sniffs content, but a
+  Copies ..\original\wmode.bwl to gproj\wmode.dll (Ghidra's PE loader sniffs content, but a
   .dll name keeps the import clean), imports it into a local Ghidra project and
   dumps decompiled C for every function to decomp\wmode.dll.c via the bundled
   DecompileAll.java postScript. Also writes decomp\wmode.dll.strings (ASCII runs,
@@ -78,8 +78,8 @@ Then re-run this script, or pass -Ghidra/-Jdk/-ToolsRoot explicitly.
 $env:JAVA_HOME = $Jdk
 
 # --- decompile ------------------------------------------------------------------
-$src = Join-Path $repo 'wmode\wmode.bwl'
-if (-not (Test-Path $src)) { throw "wmode.bwl not found at $src (expected under the wmode\ subdir)" }
+$src = Join-Path $repo 'original\wmode.bwl'
+if (-not (Test-Path $src)) { throw "wmode.bwl not found at $src (expected under the original\ subdir)" }
 
 New-Item -ItemType Directory -Force gproj, decomp | Out-Null
 $dll = Join-Path $repo 'gproj\wmode.dll'
