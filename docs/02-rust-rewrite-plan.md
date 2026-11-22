@@ -156,6 +156,9 @@ starts only after the review verdict — never auto-advance.
 - Step 6: `iat.rs` gained ordinal-aware walking (`ImportEntry.ordinal`), `find_import_ordinal`
   and `patch_import_ordinal`. `patch_import*` now return the previous slot value (the saved
   original to forward to) instead of a count.
+- Step 6: the window subclass uses `SetWindowLongA(GWL_WNDPROC)` (the x86-safe flavor) and a
+  pure pass-through proc; the first 30 messages are logged as a one-shot diagnostic (atomic
+  budget), then it stays silent and forwards via `CallWindowProcA`.
 - Step 6: the patch unit test moved to a synthetic in-memory PE image: patching the test
   binary's live IAT raced with the harness threads and crashed the test process.
 
