@@ -207,6 +207,20 @@ starts only after the review verdict — never auto-advance.
   EnableMenuItem and swallows WM_SYSCOMMAND SC_CLOSE plus NC clicks on the caption buttons.
   The screensaver half of the original ALT+F12 waits for step 13.
 
+- Step 10 (ruling): the scale ladder is [1.0, 1.25, 1.5, 1.75, 2.0] walked by ALT+-
+  and ALT+= (clamped at the ends), ALT+F9 resets to 1x. An earlier [1x, 1.5x, 2x]
+  cycle and a wider ladder with 0.5/0.75 were both dropped by user ruling during the
+  step. Ladder keys are the physical VK_OEM_MINUS / VK_OEM_PLUS.
+- Step 10: mouse message coordinates are rescaled from client pixels to game units
+  (WM_MOUSEFIRST..WM_MOUSELAST except the wheel, whose lParam is screen space).
+- Step 10: the cursor clip moved onto the original's model. While windowed every
+  game ClipCursor request is swallowed and the clip belongs to the ALT+F1 switch
+  alone (confined to the client box, or free). Two reliability findings: the game
+  never calls GetCursorPos, and it swallows some ALT keyups, so key events cannot
+  drive the inversion - the physical state is read via GetAsyncKeyState and synced
+  once per frame from the SDrawUnlockSurface hook. The ALT+F1 toggle itself applies
+  the switch directly, ignoring the inversion, so it lands the moment it is pressed.
+
 ## Risks / open questions
 
 - **BWAPI interplay**: BWAPI's own W-Mode detects Xen W-Mode via `WS_SYSMENU` in the window

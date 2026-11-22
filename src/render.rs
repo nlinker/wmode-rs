@@ -4,18 +4,18 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::Mutex;
 
-use windows_sys::Win32::Foundation::{HWND, RECT};
+use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
-    GetDC, InvalidateRect, ReleaseDC, SelectObject, SetDIBColorTable, SetStretchBltMode,
-    StretchDIBits, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HALFTONE, HDC, HBITMAP,
-    PAINTSTRUCT, PALETTEENTRY, RGBQUAD, SRCCOPY,
+    BeginPaint, BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC,
+    DeleteObject, EndPaint, GetDC, InvalidateRect, ReleaseDC, SelectObject, SetDIBColorTable,
+    SetStretchBltMode, StretchDIBits, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+    HALFTONE, HDC, HBITMAP, PAINTSTRUCT, PALETTEENTRY, RGBQUAD, SRCCOPY,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, GetClientRect, GetSystemMetrics, GetWindowLongA, GetWindowRect,
     SetWindowLongA, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, SM_CXSCREEN,
-    SM_CYSCREEN, SWP_NOMOVE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_OVERLAPPEDWINDOW,
+    SM_CYSCREEN, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::log::log;
@@ -196,9 +196,48 @@ pub fn activate_window(hwnd: HWND) {
     ));
 }
 
+/// Client top left in screen coordinates.
+pub unsafe fn client_origin(hwnd: HWND) -> (i32, i32) {
+    let mut pt = POINT { x: 0, y: 0 };
+    ClientToScreen(hwnd, &mut pt);
+    (pt.x, pt.y)
+}
+
+/// Moves the window so the client top left lands at x y, clamped to the
+/// visible desktop. Negative coordinates mean "leave it where it is".
+pub unsafe fn set_client_origin(hwnd: HWND, x: i32, y: i32) {
+    if x < 0 || y < 0 {
+        return;
+    }
+    let (ox, oy) = client_origin(hwnd);
+    let mut outer = RECT::default();
+    GetWindowRect(hwnd, &mut outer);
+    let cx = GetSystemMetrics(SM_CXSCREEN);
+    let cy = GetSystemMetrics(SM_CYSCREEN);
+    let w = outer.right - outer.left;
+    let h = outer.bottom - outer.top;
+    let wx = (outer.left + (x - ox)).clamp(0, (cx - w).max(0));
+    let wy = (outer.top + (y - oy)).clamp(0, (cy - h).max(0));
+    SetWindowPos(
+        hwnd,
+        core::ptr::null_mut(),
+        wx,
+        wy,
+        0,
+        0,
+        SWP_NOSIZE | SWP_NOZORDER,
+    );
+}
+
 /// Resizes the window so the client becomes cw x ch, keeping the top
-/// left corner inside the visible desktop.
+/// left corner inside the visible desktop. A no-op when the client
+/// already carries that size.
 pub unsafe fn set_client_size(hwnd: HWND, cw: i32, ch: i32) {
+    let mut client = RECT::default();
+    GetClientRect(hwnd, &mut client);
+    if client.right == cw && client.bottom == ch {
+        return;
+    }
     let (ow, oh) = outer_size_for(hwnd, cw, ch);
     let mut outer = RECT::default();
     GetWindowRect(hwnd, &mut outer);

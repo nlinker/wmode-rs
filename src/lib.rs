@@ -27,7 +27,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, HINSTANCE, TRUE};
 use windows_sys::Win32::System::LibraryLoader::{
     DisableThreadLibraryCalls, GetModuleFileNameA, GetModuleHandleA,
 };
-use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
+use windows_sys::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 use windows_sys::Win32::UI::WindowsAndMessaging::{SM_CXSCREEN, SM_CYSCREEN};
 use windows_sys::Win32::System::Threading::{CreateThread, Sleep};
 
@@ -49,6 +49,11 @@ const GAME_USER32_IMPORTS: &[&str] = &["GetCursorPos", "SetCursorPos", "ClipCurs
 /// notifications and spawns the init thread. The launcher loads this DLL
 /// into itself too, where it must stay dormant. Loader-lock rule: nothing
 /// else runs here, the spawned thread starts once DllMain has returned.
+/// One deliberate exception: on process detach the window state is saved
+/// into wmode.ini - the game exits via ExitProcess and delivers neither
+/// WM_CLOSE nor WM_DESTROY, so DLL_PROCESS_DETACH is the only exit
+/// notification an injected DLL ever sees. The save touches the file
+/// system and cached statics only, no window queries.
 #[no_mangle]
 pub extern "system" fn DllMain(
     hinst: HINSTANCE,
@@ -60,6 +65,9 @@ pub extern "system" fn DllMain(
             DisableThreadLibraryCalls(hinst);
         }
         spawn_init_thread();
+    }
+    if reason == DLL_PROCESS_DETACH && host_exe_is_starcraft() {
+        window::save_cached();
     }
     TRUE
 }
@@ -271,7 +279,17 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
                 log("init: window subclass FAILED");
             }
             render::activate_window(hwnd);
-            cursor::refresh_clip();
+            if let Some(cfg) = ini::read_config() {
+                log("init: wmode.ini loaded");
+                window::apply_config(hwnd, &cfg);
+                cursor::set_clip_enabled(cfg.clip_cursor);
+                scale::set_from_value(cfg.scale);
+                unsafe {
+                    render::set_client_origin(hwnd, cfg.window_client_x, cfg.window_client_y);
+                }
+            }
+            scale::apply_current(hwnd);
+            cursor::apply_switch();
             return 0;
         }
         Sleep(WINDOW_POLL_MS);

@@ -32,6 +32,29 @@ pub fn client_wanted() -> (i32, i32) {
     )
 }
 
+/// Restores the scale from an ini value: the nearest ladder entry wins.
+pub fn set_from_value(value: f32) {
+    let mut best = 0;
+    let mut best_err = f32::MAX;
+    for (i, s) in SCALES.iter().enumerate() {
+        let err = (s - value).abs();
+        if err < best_err {
+            best_err = err;
+            best = i;
+        }
+    }
+    IDX.store(best, Ordering::Relaxed);
+}
+
+/// Resizes the window to the current ladder scale. A no-op at 1x when
+/// the client already matches.
+pub fn apply_current(hwnd: HWND) {
+    let (cw, ch) = client_wanted();
+    unsafe {
+        render::set_client_size(hwnd, cw, ch);
+    }
+}
+
 fn apply(hwnd: HWND) {
     let (cw, ch) = client_wanted();
     unsafe {

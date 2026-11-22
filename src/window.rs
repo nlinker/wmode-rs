@@ -12,8 +12,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcA, DefWindowProcA, EnableMenuItem, GetSystemMenu, SetWindowLongA, SetWindowPos,
     GWL_WNDPROC, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HWND_NOTOPMOST, HWND_TOPMOST,
     MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SWP_NOMOVE,
-    SWP_NOSIZE, WM_DISPLAYCHANGE, WM_MOUSEFIRST, WM_MOUSELAST, WM_MOUSEWHEEL,
-    WM_NCLBUTTONDOWN, WM_PAINT, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
+    ShowCursor, SWP_NOSIZE, WM_DISPLAYCHANGE, WM_MOUSEFIRST,
+    WM_MOUSELAST, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCLBUTTONDOWN, WM_NCMOUSEMOVE,
+    WM_PAINT, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
 };
 
 use crate::cursor;
@@ -31,6 +32,24 @@ static MOVE_ENABLED: AtomicBool = AtomicBool::new(true);
 static TOPMOST: AtomicBool = AtomicBool::new(false);
 /// Caption buttons (close, maximize, minimize) active, the ALT+F12 state.
 static CAPTION_CONTROLS: AtomicBool = AtomicBool::new(true);
+/// Whether the arrow cursor is currently hidden by us. The game hides
+/// the system cursor while it renders its own, over the caption nothing
+/// renders it, so we show the arrow there.
+static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(true);
+/// Last known client position, cached on every move: the exit save runs
+/// in DLL_PROCESS_DETACH where window queries are off limits.
+static WINDOW_CLIENT_X: AtomicI32 = AtomicI32::new(-1);
+static WINDOW_CLIENT_Y: AtomicI32 = AtomicI32::new(-1);
+
+/// Shows or hides the arrow cursor, one ShowCursor call per state change.
+fn set_cursor_show(show: bool) {
+    if show == CURSOR_HIDDEN.load(Ordering::Relaxed) {
+        unsafe {
+            ShowCursor(show as i32);
+        }
+        CURSOR_HIDDEN.store(!show, Ordering::Relaxed);
+    }
+}
 
 /// Applies the always-on-top state to the window.
 unsafe fn apply_topmost(hwnd: HWND) {
@@ -56,6 +75,61 @@ unsafe fn apply_caption_controls(hwnd: HWND) {
     EnableMenuItem(menu, SC_CLOSE, flags);
     EnableMenuItem(menu, SC_MAXIMIZE, flags);
     EnableMenuItem(menu, SC_MINIMIZE, flags);
+}
+
+/// Applies a loaded ini config to the toggle states and the window.
+pub fn apply_config(hwnd: HWND, cfg: &crate::ini::Config) {
+    MOVE_ENABLED.store(cfg.enable_window_move, Ordering::Relaxed);
+    TOPMOST.store(cfg.always_on_top, Ordering::Relaxed);
+    CAPTION_CONTROLS.store(!cfg.disable_controls, Ordering::Relaxed);
+    unsafe {
+        apply_topmost(hwnd);
+        apply_caption_controls(hwnd);
+    }
+}
+
+/// Current toggle states, for the exit save.
+pub fn move_enabled() -> bool {
+    MOVE_ENABLED.load(Ordering::Relaxed)
+}
+
+pub fn topmost() -> bool {
+    TOPMOST.load(Ordering::Relaxed)
+}
+
+pub fn caption_controls() -> bool {
+    CAPTION_CONTROLS.load(Ordering::Relaxed)
+}
+
+/// Remembers the client position for the exit save. Minimized windows
+/// report the placeholder position -32000 and must not poison the cache.
+unsafe fn remember_client_pos(hwnd: HWND) {
+    let (x, y) = render::client_origin(hwnd);
+    if x <= -10000 || y <= -10000 {
+        return;
+    }
+    WINDOW_CLIENT_X.store(x, Ordering::Relaxed);
+    WINDOW_CLIENT_Y.store(y, Ordering::Relaxed);
+}
+
+/// Exit save for DLL_PROCESS_DETACH: uses the cached client position,
+/// no window queries, the loader lock is held at that point.
+pub fn save_cached() {
+    let ok = crate::ini::save_state(&crate::ini::SaveState {
+        client_x: WINDOW_CLIENT_X.load(Ordering::Relaxed),
+        client_y: WINDOW_CLIENT_Y.load(Ordering::Relaxed),
+        clip_cursor: cursor::clip_enabled(),
+        enable_window_move: move_enabled(),
+        always_on_top: topmost(),
+        disable_controls: !caption_controls(),
+        scale: scale::current(),
+    });
+    log(&format!(
+        "window: exit save {} ({},{})",
+        if ok { "written" } else { "failed" },
+        WINDOW_CLIENT_X.load(Ordering::Relaxed),
+        WINDOW_CLIENT_Y.load(Ordering::Relaxed)
+    ));
 }
 
 /// Subclasses the game window, keeping the original procedure for
@@ -90,6 +164,9 @@ unsafe extern "system" fn our_wnd_proc(
         let w = (lparam & 0xFFFF) as u16;
         let h = ((lparam >> 16) & 0xFFFF) as u16;
         log(&format!("window: WM_DISPLAYCHANGE {w}x{h} depth={wparam}"));
+    }
+    if msg == WM_MOVE {
+        remember_client_pos(hwnd);
     }
     if msg == WM_PAINT && render::windowed() {
         render::paint(hwnd);
@@ -135,6 +212,12 @@ unsafe extern "system" fn our_wnd_proc(
             }
             _ => {}
         }
+    }
+    if msg == WM_NCMOUSEMOVE {
+        set_cursor_show(true);
+    }
+    if msg == WM_MOUSEMOVE {
+        set_cursor_show(false);
     }
     // mouse messages carry client pixels: rescale them to game units
     // while the client is not the game size (the scale cycle). Wheel
