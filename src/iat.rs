@@ -52,8 +52,14 @@ pub unsafe fn imports(module: HMODULE) -> Option<Vec<ImportEntry>> {
         return None;
     }
     let optional = pe + 4 + 20;
-    let import_rva = read_at::<u32>(base, optional + 96 + DIR_IMPORT * 8) as usize;
-    let import_size = read_at::<u32>(base, optional + 96 + DIR_IMPORT * 8 + 4) as usize;
+    // PE32+ optional headers are 16 bytes longer before the data
+    // directories than PE32 ones
+    let data_dir = match read_at::<u16>(base, optional) {
+        0x20B => optional + 112,
+        _ => optional + 96,
+    };
+    let import_rva = read_at::<u32>(base, data_dir + DIR_IMPORT * 8) as usize;
+    let import_size = read_at::<u32>(base, data_dir + DIR_IMPORT * 8 + 4) as usize;
     if import_rva == 0 || import_size == 0 {
         return None;
     }
@@ -267,10 +273,10 @@ mod tests {
         assert_eq!(unsafe { (slot as *const u32).read_unaligned() }, 0x1234_5678);
 
         assert_eq!(
-            unsafe { patch_import(base as HMODULE, "kernel32.dll", "GetModuleHandleA", fake as usize as _) },
+            unsafe { patch_import(base as HMODULE, "kernel32.dll", "GetModuleHandleA", fake as *const () as usize as _) },
             Some(0x1234_5678)
         );
-        assert_eq!(unsafe { (slot as *const u32).read_unaligned() }, fake as usize as u32);
+        assert_eq!(unsafe { (slot as *const u32).read_unaligned() }, fake as *const () as usize as u32);
 
         assert_eq!(
             unsafe {
@@ -281,7 +287,7 @@ mod tests {
                     0x1234_5678usize as _,
                 )
             },
-            Some(fake as usize as u32)
+            Some(fake as *const () as usize as u32)
         );
         assert_eq!(unsafe { (slot as *const u32).read_unaligned() }, 0x1234_5678);
     }
@@ -295,9 +301,9 @@ mod tests {
             .expect("synthetic ordinal import present");
         assert_eq!(unsafe { (slot as *const u32).read_unaligned() }, 0xDEAD_BEEF);
         assert_eq!(
-            unsafe { patch_import_ordinal(base as HMODULE, "kernel32.dll", 350, fake as usize as _) },
+            unsafe { patch_import_ordinal(base as HMODULE, "kernel32.dll", 350, fake as *const () as usize as _) },
             Some(0xDEAD_BEEF)
         );
-        assert_eq!(unsafe { (slot as *const u32).read_unaligned() }, fake as usize as u32);
+        assert_eq!(unsafe { (slot as *const u32).read_unaligned() }, fake as *const () as usize as u32);
     }
 }
