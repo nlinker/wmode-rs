@@ -138,6 +138,27 @@ starts only after the review verdict — never auto-advance.
   into itself, and its copy must stay dormant, otherwise both processes race for the same
   game window (duplicate HWND finds in the log).
 
+- Step 5: import names are read from the original name table (OriginalFirstThunk), not the
+  IAT, so entries stay correct after loader resolution. `patch_import` flips page protection
+  around the write and restores it. Forwarding design (decided): before patching, read and
+  save the slot's current value into an `Old`-style static, same shape as BWAPI's
+  `*Old` pointers (WMode.cpp:29-34). While windowing is inactive (startup, or if a disable
+  path is ever added) every hook forwards to the saved original with unchanged convention
+  and arguments.
+
+- Step 6 (finding): StarCraft.exe imports EVERYTHING from storm.dll by ordinal (verified by
+  dumping its import table), and storm.dll exports by ordinal only (zero names, ordinal base
+  101). Name-based IAT lookup therefore finds no SDraw functions. Ordinals per BWAPI
+  CodePatch.cpp:73-75: `SDrawLockSurface` = 350, `SDrawUnlockSurface` = 356,
+  `SDrawUpdatePalette` = 357. All three resolve in the live game process (verified in the
+  runtime log), so the IAT patch covers the palette hook too. An earlier static file dump
+  suggested 357 was absent - the runtime check wins, no direct storm.dll export patch needed.
+- Step 6: `iat.rs` gained ordinal-aware walking (`ImportEntry.ordinal`), `find_import_ordinal`
+  and `patch_import_ordinal`. `patch_import*` now return the previous slot value (the saved
+  original to forward to) instead of a count.
+- Step 6: the patch unit test moved to a synthetic in-memory PE image: patching the test
+  binary's live IAT raced with the harness threads and crashed the test process.
+
 ## Risks / open questions
 
 - **BWAPI interplay**: BWAPI's own W-Mode detects Xen W-Mode via `WS_SYSMENU` in the window

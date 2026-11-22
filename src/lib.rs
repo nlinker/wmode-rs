@@ -11,6 +11,7 @@ mod iat;
 mod ini;
 mod inject;
 mod log;
+mod window;
 
 use log::log;
 
@@ -27,15 +28,14 @@ const GAME_WINDOW_CLASS: &[u8] = b"SWarClass\0";
 const WINDOW_POLL_MS: u32 = 50;
 const WINDOW_POLL_MAX_TRIES: u32 = 1200; // 60 s
 
-/// Imports this DLL will redirect, as dll/function pairs.
-const GAME_IMPORTS: &[(&str, &str)] = &[
-    ("storm.dll", "SDrawLockSurface"),
-    ("storm.dll", "SDrawUnlockSurface"),
-    ("storm.dll", "SDrawUpdatePalette"),
-    ("user32.dll", "GetCursorPos"),
-    ("user32.dll", "SetCursorPos"),
-    ("user32.dll", "ClipCursor"),
+/// storm.dll exports by ordinal only (no name table), and StarCraft.exe
+/// imports it by ordinal. Numbers per BWAPI CodePatch.cpp.
+const GAME_STORM_ORDINALS: &[(u16, &str)] = &[
+    (350, "SDrawLockSurface"),
+    (356, "SDrawUnlockSurface"),
+    (357, "SDrawUpdatePalette"),
 ];
+const GAME_USER32_IMPORTS: &[&str] = &["GetCursorPos", "SetCursorPos", "ClipCursor"];
 
 /// DLL entry point. Only inside the game process: disables thread
 /// notifications and spawns the init thread. The launcher loads this DLL
@@ -90,10 +90,16 @@ fn spawn_init_thread() {
 /// Logs which of the hook-target imports exist in the game executable.
 fn log_game_imports() {
     let exe = unsafe { GetModuleHandleA(core::ptr::null()) };
-    for (dll, func) in GAME_IMPORTS {
-        match unsafe { iat::find_import(exe, dll, func) } {
-            Some(slot) => log(&format!("init: import {dll}!{func} at {slot:p}")),
-            None => log(&format!("init: import {dll}!{func} NOT FOUND")),
+    for (ordinal, name) in GAME_STORM_ORDINALS {
+        match unsafe { iat::find_import_ordinal(exe, "storm.dll", *ordinal) } {
+            Some(slot) => log(&format!("init: import storm.dll!{name} (#{ordinal}) at {slot:p}")),
+            None => log(&format!("init: import storm.dll!{name} (#{ordinal}) NOT FOUND")),
+        }
+    }
+    for func in GAME_USER32_IMPORTS {
+        match unsafe { iat::find_import(exe, "user32.dll", func) } {
+            Some(slot) => log(&format!("init: import user32.dll!{func} at {slot:p}")),
+            None => log(&format!("init: import user32.dll!{func} NOT FOUND")),
         }
     }
 }
@@ -110,6 +116,9 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
         if !hwnd.is_null() {
             log(&format!("init: game window found hwnd={hwnd:p}"));
             log_game_imports();
+            if !window::install(hwnd) {
+                log("init: window subclass FAILED");
+            }
             return 0;
         }
         Sleep(WINDOW_POLL_MS);
