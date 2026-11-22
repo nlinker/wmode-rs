@@ -269,7 +269,7 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
                 log("init: window subclass FAILED");
             }
             render::activate_window(hwnd);
-            cursor::reclip();
+            cursor::refresh_clip();
             return 0;
         }
         Sleep(WINDOW_POLL_MS);

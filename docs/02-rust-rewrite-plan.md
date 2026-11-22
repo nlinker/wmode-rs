@@ -162,6 +162,37 @@ starts only after the review verdict — never auto-advance.
 - Step 6: the patch unit test moved to a synthetic in-memory PE image: patching the test
   binary's live IAT raced with the harness threads and crashed the test process.
 
+- Step 7 (finding): the SDraw hooks must NEVER forward to storm while windowed. The first
+  forwarded call makes storm lazily initialize real DirectDraw fullscreen-exclusive and flip
+  the desktop mode. The whole fake-DirectDraw layer exists to keep storm satisfied without it.
+- Step 7: real DirectDraw is never created. `DirectDrawCreate` is intercepted via
+  GetProcAddress/LoadLibraryA IAT hooks (storm.dll, its child libraries like smackw32.dll,
+  and the game exe) and returns fake COM objects (23-slot DirectDraw vtable, 35-slot surface
+  vtable, arity-stubbed). The storm DirectDraw object slot (storm base + RVA 0x5E664) is
+  replaced in place; the storm module is resolved with
+  `GetModuleHandleExA(FROM_ADDRESS | UNCHANGED_REFCOUNT)` off the saved original
+  `SDrawLockSurface` address, so no GetModuleHandle-by-name races with the loader.
+- Step 7: the launcher side sets the storm registry flag `Window Mode=1`
+  (HKCU\Software\Blizzard Entertainment\Internal) in ApplyPatchSuspended before injecting -
+  storm then creates a plain cooperative window instead of a fullscreen exclusive one - and
+  restores the previous value in ApplyPatch. Readiness is confirmed cross-process by waiting
+  for the `res: hooks installed` marker in the shared `%TEMP%\wmode-rs.log`. A mode guard
+  additionally IAT-patches ChangeDisplaySettings* inside ddraw.dll.
+- Step 8: the game positions and clips the cursor in a 640x480 space rooted at the desktop
+  origin. The user32 trio is translated onto the client area with game/client scaling built
+  in (ready for 1.5x/2x). Two shapes arrive: raw game rects (0,0,640,480) and pre-translated
+  screen rects anchored at the client origin (on refocus) - the hook detects the anchor and
+  strips it, so both translate identically. The last game clip rect is remembered and
+  re-applied after window moves (on deactivate the game unclips, then there is nothing to
+  re-apply).
+- Step 8: window sizing goes through `AdjustWindowRectEx` (style flags in, outer size out).
+  Measuring the live frame was a trap: `SetWindowLongA(style)` does not recalculate the
+  frame until a SetWindowPos, so a just-restyled window measured a zero border and an
+  unchanged outer size sends no WM_SIZE at all. A WM_SIZE corrector still reverts storm's
+  own outer-640x480 resizes on every activation.
+- Step 8 (deferred to step 10): WM_MOUSEMOVE lParam scaling (the FixPoints part) is not
+  needed while client == game size and lands together with the scale cycle.
+
 ## Risks / open questions
 
 - **BWAPI interplay**: BWAPI's own W-Mode detects Xen W-Mode via `WS_SYSMENU` in the window
@@ -171,6 +202,11 @@ starts only after the review verdict — never auto-advance.
 - **Loader lock**: init strictly on a spawned thread; hooks installed only after window exists.
 - **HALFTONE StretchDIBits cost** at 2x on weak machines — `MaxFps` default 100 covers it.
 - **Windows 11 DPI**: declare DPI-aware via manifest? Original predates it; test raw first.
+- **Cursor clip on ALT release (known deviation, minor)**: the readme defers re-activating the
+  clip until the cursor comes back over the window when ALT is released while the cursor is
+  outside ("it will be actually activated only when you move the cursor back"). We re-apply
+  the clip immediately, so the cursor is pulled back inside by the system. Deferred-activation
+  machinery was tried and dropped as non-obvious behavior.
 - **Toolchain**: MSVC link target for x86 — needs VS BuildTools x86 libs installed; fallback
   `i686-pc-windows-gnu` if not.
 - **Calling conventions**: everything `extern "system"`; storm hooks are `__stdcall` (`system`

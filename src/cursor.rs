@@ -4,7 +4,7 @@
 //! still owned the whole screen, so the three user32 imports it calls get
 //! patched in the game executable and remapped onto the window.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use windows_sys::core::BOOL;
@@ -28,6 +28,11 @@ static SET_OLD: AtomicU32 = AtomicU32::new(0);
 static CLIP_OLD: AtomicU32 = AtomicU32::new(0);
 /// Last clip rect the game asked for, in game coordinates.
 static CLIP_REQUEST: Mutex<Option<RECT>> = Mutex::new(None);
+/// User switch for cursor clipping, the ALT+F1 state. Default off, per
+/// the sample ini.
+static CLIP_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Holding ALT temporarily inverts the clip switch.
+static ALT_HELD: AtomicBool = AtomicBool::new(false);
 /// How many clip calls get logged before the diagnostic goes quiet.
 static LOG_BUDGET: AtomicU32 = AtomicU32::new(20);
 
@@ -190,19 +195,47 @@ unsafe extern "system" fn clip_cursor(rect: *const RECT) -> BOOL {
     }
     let rect = *rect;
     *CLIP_REQUEST.lock().unwrap() = Some(rect);
+    if !clip_active() {
+        return real_clip(core::ptr::null());
+    }
     apply_clip(rect)
 }
 
-/// Re-applies the remembered game clip rect after the window moved or
-/// resized, so an early ClipCursor call does not stay stuck at the old
-/// place on screen.
-pub fn reclip() {
+/// Whether the user wants the cursor confined, the ALT+F1 state.
+pub fn clip_enabled() -> bool {
+    CLIP_ENABLED.load(Ordering::Relaxed)
+}
+
+pub fn set_clip_enabled(on: bool) {
+    CLIP_ENABLED.store(on, Ordering::Relaxed);
+}
+
+/// The clip applies only with the switch on and ALT not held: holding
+/// ALT inverts the switch for as long as it is down.
+fn clip_active() -> bool {
+    CLIP_ENABLED.load(Ordering::Relaxed) != ALT_HELD.load(Ordering::Relaxed)
+}
+
+/// ALT press or release: refreshes the clip when the effective state
+/// actually changed.
+pub fn set_alt_held(held: bool) {
+    if ALT_HELD.swap(held, Ordering::Relaxed) != held {
+        refresh_clip();
+    }
+}
+
+/// Brings the applied cursor clip in line with the current switch
+/// state: re-applies the remembered game rect, or frees the cursor.
+pub fn refresh_clip() {
     let request = *CLIP_REQUEST.lock().unwrap();
-    if let Some(rect) = request {
-        unsafe {
-            apply_clip(rect);
+    unsafe {
+        if clip_active() {
+            if let Some(rect) = request {
+                apply_clip(rect);
+            }
+        } else {
+            real_clip(core::ptr::null());
         }
-        log("cursor: clip re-applied to the moved window");
     }
 }
 
