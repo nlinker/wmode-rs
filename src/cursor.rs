@@ -1,0 +1,222 @@
+//! Cursor translation between the game's coordinate space (a 640x480
+//! screen rooted at the desktop origin) and the real window client area
+//! elsewhere on screen. The game clips and positions the cursor as if it
+//! still owned the whole screen, so the three user32 imports it calls get
+//! patched in the game executable and remapped onto the window.
+
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+
+use windows_sys::core::BOOL;
+use windows_sys::Win32::Foundation::{FALSE, HWND, POINT, RECT, TRUE};
+use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    ClipCursor, GetClientRect, GetCursorPos, SetCursorPos,
+};
+
+use crate::iat;
+use crate::log::log;
+use crate::render;
+
+type GetCursorPosFn = unsafe extern "system" fn(*mut POINT) -> BOOL;
+type SetCursorPosFn = unsafe extern "system" fn(i32, i32) -> BOOL;
+type ClipCursorFn = unsafe extern "system" fn(*const RECT) -> BOOL;
+
+static GET_OLD: AtomicU32 = AtomicU32::new(0);
+static SET_OLD: AtomicU32 = AtomicU32::new(0);
+static CLIP_OLD: AtomicU32 = AtomicU32::new(0);
+/// Last clip rect the game asked for, in game coordinates.
+static CLIP_REQUEST: Mutex<Option<RECT>> = Mutex::new(None);
+
+/// Window geometry needed for translation, all in one snapshot.
+struct Map {
+    hwnd: HWND,
+    /// Game screen size (the DIB the game draws into).
+    gw: i32,
+    gh: i32,
+    /// Client area size in pixels.
+    cw: i32,
+    ch: i32,
+    /// Client top left in screen coordinates.
+    ox: i32,
+    oy: i32,
+}
+
+/// Collects the translation snapshot, or None while the window does not
+/// exist yet or windowed mode is off (calls then pass through unchanged).
+unsafe fn mapping() -> Option<Map> {
+    if !render::windowed() {
+        return None;
+    }
+    let hwnd = render::game_hwnd();
+    if hwnd.is_null() {
+        return None;
+    }
+    let mut client = RECT::default();
+    GetClientRect(hwnd, &mut client);
+    let cw = client.right - client.left;
+    let ch = client.bottom - client.top;
+    if cw <= 0 || ch <= 0 {
+        return None;
+    }
+    let (gw, gh) = render::game_size();
+    if gw <= 0 || gh <= 0 {
+        return None;
+    }
+    let mut origin = POINT { x: 0, y: 0 };
+    ClientToScreen(hwnd, &mut origin);
+    Some(Map {
+        hwnd,
+        gw,
+        gh,
+        cw,
+        ch,
+        ox: origin.x,
+        oy: origin.y,
+    })
+}
+
+unsafe fn real_get(point: *mut POINT) -> BOOL {
+    let old = GET_OLD.load(Ordering::Acquire);
+    if old != 0 {
+        let f: GetCursorPosFn = core::mem::transmute(old as usize);
+        f(point)
+    } else {
+        GetCursorPos(point)
+    }
+}
+
+unsafe fn real_set(x: i32, y: i32) -> BOOL {
+    let old = SET_OLD.load(Ordering::Acquire);
+    if old != 0 {
+        let f: SetCursorPosFn = core::mem::transmute(old as usize);
+        f(x, y)
+    } else {
+        SetCursorPos(x, y)
+    }
+}
+
+unsafe fn real_clip(rect: *const RECT) -> BOOL {
+    let old = CLIP_OLD.load(Ordering::Acquire);
+    if old != 0 {
+        let f: ClipCursorFn = core::mem::transmute(old as usize);
+        f(rect)
+    } else {
+        ClipCursor(rect)
+    }
+}
+
+/// Translates one clip rect from game coordinates to the screen, clamped
+/// to the client area, and applies it.
+unsafe fn apply_clip(rect: RECT) -> BOOL {
+    if let Some(m) = mapping() {
+        let mut out = RECT {
+            left: m.ox + rect.left * m.cw / m.gw,
+            top: m.oy + rect.top * m.ch / m.gh,
+            right: m.ox + (rect.right * m.cw + m.gw - 1) / m.gw,
+            bottom: m.oy + (rect.bottom * m.ch + m.gh - 1) / m.gh,
+        };
+        out.left = out.left.max(m.ox);
+        out.top = out.top.max(m.oy);
+        out.right = out.right.min(m.ox + m.cw);
+        out.bottom = out.bottom.min(m.oy + m.ch);
+        if out.right > out.left && out.bottom > out.top {
+            return real_clip(&out);
+        }
+    }
+    real_clip(&rect)
+}
+
+unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
+    let res = real_get(point);
+    if res == FALSE || point.is_null() {
+        return res;
+    }
+    if let Some(m) = mapping() {
+        ScreenToClient(m.hwnd, point);
+        (*point).x = (*point).x * m.gw / m.cw;
+        (*point).y = (*point).y * m.gh / m.ch;
+    }
+    TRUE
+}
+
+unsafe extern "system" fn set_cursor_pos(x: i32, y: i32) -> BOOL {
+    if let Some(m) = mapping() {
+        let mut pt = POINT {
+            x: x * m.cw / m.gw,
+            y: y * m.ch / m.gh,
+        };
+        ClientToScreen(m.hwnd, &mut pt);
+        return real_set(pt.x, pt.y);
+    }
+    real_set(x, y)
+}
+
+unsafe extern "system" fn clip_cursor(rect: *const RECT) -> BOOL {
+    if rect.is_null() {
+        *CLIP_REQUEST.lock().unwrap() = None;
+        return real_clip(core::ptr::null());
+    }
+    let rect = *rect;
+    *CLIP_REQUEST.lock().unwrap() = Some(rect);
+    apply_clip(rect)
+}
+
+/// Re-applies the remembered game clip rect after the window moved or
+/// resized, so an early ClipCursor call does not stay stuck at the old
+/// place on screen.
+pub fn reclip() {
+    let request = *CLIP_REQUEST.lock().unwrap();
+    if let Some(rect) = request {
+        unsafe {
+            apply_clip(rect);
+        }
+        log("cursor: clip re-applied to the moved window");
+    }
+}
+
+/// Patches the three cursor imports in the game executable. Returns true
+/// when every one of them was found, false otherwise (the game keeps
+/// running either way, only cursor behavior degrades).
+pub fn install() -> bool {
+    let exe = unsafe { GetModuleHandleA(core::ptr::null()) };
+    let get_fn: GetCursorPosFn = get_cursor_pos;
+    let set_fn: SetCursorPosFn = set_cursor_pos;
+    let clip_fn: ClipCursorFn = clip_cursor;
+
+    let mut ok = true;
+    match unsafe {
+        iat::patch_import(exe, "user32.dll", "GetCursorPos", get_fn as usize as _)
+    } {
+        Some(old) => {
+            GET_OLD.store(old, Ordering::Release);
+            log(&format!("cursor: GetCursorPos patched, old {old:#010x}"));
+        }
+        None => {
+            ok = false;
+            log("cursor: GetCursorPos NOT PATCHED");
+        }
+    }
+    match unsafe { iat::patch_import(exe, "user32.dll", "SetCursorPos", set_fn as usize as _) } {
+        Some(old) => {
+            SET_OLD.store(old, Ordering::Release);
+            log(&format!("cursor: SetCursorPos patched, old {old:#010x}"));
+        }
+        None => {
+            ok = false;
+            log("cursor: SetCursorPos NOT PATCHED");
+        }
+    }
+    match unsafe { iat::patch_import(exe, "user32.dll", "ClipCursor", clip_fn as usize as _) } {
+        Some(old) => {
+            CLIP_OLD.store(old, Ordering::Release);
+            log(&format!("cursor: ClipCursor patched, old {old:#010x}"));
+        }
+        None => {
+            ok = false;
+            log("cursor: ClipCursor NOT PATCHED");
+        }
+    }
+    ok
+}

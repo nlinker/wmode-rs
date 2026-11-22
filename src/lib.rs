@@ -7,6 +7,7 @@
 #![allow(non_snake_case)]
 
 mod bwl;
+mod cursor;
 mod ddraw;
 mod hooks;
 mod iat;
@@ -237,6 +238,9 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
         log("init: render hooks FAILED, game left untouched");
         return 0;
     }
+    if !cursor::install() {
+        log("init: cursor hooks incomplete");
+    }
     log_res("hooks installed");
     let watcher = unsafe {
         CreateThread(
@@ -265,6 +269,7 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
                 log("init: window subclass FAILED");
             }
             render::activate_window(hwnd);
+            cursor::reclip();
             return 0;
         }
         Sleep(WINDOW_POLL_MS);
