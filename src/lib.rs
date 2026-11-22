@@ -1,8 +1,9 @@
 //! wmode-rs, a Rust rewrite of W-MODE v1.02 (XeNotRoN, 2008).
 //!
 //! Windowed-mode plugin for StarCraft: Brood War 1.16.1, loaded as a
-//! ChaosLauncher (BWL4) plugin. Alt+F9 cycles window scale 1x -> 1.5x -> 2x.
-//! Everything else mirrors the original per `original\WModeReadme.txt`.
+//! ChaosLauncher (BWL4) plugin. ALT+- and ALT+= walk the window scale
+//! ladder [1.0 .. 2.0], ALT+F9 resets to 1x. Everything else mirrors
+//! the original per `original\WModeReadme.txt`.
 
 #![allow(non_snake_case)]
 

@@ -23,7 +23,7 @@ const STARCRAFT_BUILD: i32 = 13;
 const NAME: &[u8] = b"wmode-rs";
 /// Description shown in the launcher plugin list.
 const DESCRIPTION: &[u8] = b"Windowed mode plugin for StarCraft: Brood War 1.16.1.\r\n\
-     ALT+F9 cycles window scale 1x -> 1.5x -> 2x.\r\n\
+     ALT+- / ALT+= scale down and up, ALT+F9 resets to 1x.\r\n\
      Rust rewrite of W-MODE v1.02 by XeNotRoN (2008)";
 
 /// Copies `src` into a launcher-provided NUL-terminated buffer, truncating

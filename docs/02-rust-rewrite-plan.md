@@ -1,8 +1,9 @@
 # Plan: wmode-rs — Rust rewrite of W-MODE v1.02
 
 Companion to `01-decompilation-findings.md`. Deliverable: a Rust cdylib that replaces `wmode.bwl`
-as a ChaosLauncher (BWL4) plugin for StarCraft 1.16.1, feature-equal to the original **except**
-ALT+F9, which cycles window scale `1x → 1.5x → 2x → 1x` instead of toggling 2x.
+as a ChaosLauncher (BWL4) plugin for StarCraft 1.16.1, feature-equal to the original
+**except** window scaling: ALT+- / ALT+= walk a scale ladder `[1.0 .. 2.0]` and ALT+F9
+resets to 1x, instead of the original doublesize toggle.
 
 ## Crate layout (Cargo.toml at the repo root)
 
@@ -77,16 +78,17 @@ no window calls in DllMain). The init thread then:
 holding ALT, real mapped pos when holding ALT); `SetCursorPos`/`ClipCursor` → no-op while
 windowed (WMode.cpp:463-517).
 
-## ALT+F9 scale cycle (the new feature)
+## Window scaling (the new feature)
 
 ```
-scale.rs: const SCALES: [f32; 3] = [1.0, 1.5, 2.0];  idx: AtomicUsize
+scale.rs: const SCALES: [f32; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];  idx: AtomicUsize
 ```
-On `WM_SYSKEYDOWN` `VK_F9` with ALT down: `idx = (idx+1) % 3`; new client size
-`round(game_w * s) × round(game_h * s)`; `SetWindowPos` with `GetBorderSize` added; clamp to
-visible desktop (WMode.cpp:607-627 math). Persist to `wmode.ini` when `SaveScale=1` (new key,
-default 1). All other hotkeys (ALT+F1 clip, F10 move, F11 topmost, F12 caption controls) and
-their ini keys exactly per `WModeReadme.txt` / `docs/01-decompilation-findings.md` ini table.
+ALT+- and ALT+= step the ladder down/up (clamped at the ends), ALT+F9 resets to 1x. New
+client size `round(game_w * s) × round(game_h * s)`; `SetWindowPos` sized via
+`AdjustWindowRectEx`; top left clamped to the visible desktop. Persist to `wmode.ini` when
+`SaveScale=1` (new key, default 1). All other hotkeys (ALT+F1 clip, F10 move, F11 topmost,
+F12 caption controls) and their ini keys exactly per `WModeReadme.txt` /
+`docs/01-decompilation-findings.md` ini table.
 
 ## Steps (each ends testable, one review + commit each)
 

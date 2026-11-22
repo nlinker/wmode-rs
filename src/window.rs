@@ -5,7 +5,9 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_F1, VK_F10, VK_F11, VK_F12, VK_F9};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    VK_F1, VK_F10, VK_F11, VK_F12, VK_F9, VK_OEM_MINUS, VK_OEM_PLUS,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcA, DefWindowProcA, EnableMenuItem, GetSystemMenu, SetWindowLongA, SetWindowPos,
     GWL_WNDPROC, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HWND_NOTOPMOST, HWND_TOPMOST,
@@ -102,7 +104,9 @@ unsafe extern "system" fn our_wnd_proc(
     if msg == WM_SYSKEYDOWN {
         // the VK_* constants are u16, so the key is matched in that width
         match wparam as u16 {
-            VK_F9 => scale::cycle(hwnd),
+            VK_F9 => scale::reset(hwnd),
+            VK_OEM_MINUS => scale::smaller(hwnd),
+            VK_OEM_PLUS => scale::bigger(hwnd),
             VK_F1 => {
                 let on = !cursor::clip_enabled();
                 cursor::set_clip_enabled(on);

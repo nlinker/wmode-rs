@@ -1,6 +1,6 @@
-//! Window scale cycling: ALT+F9 walks 1x -> 1.5x -> 2x -> 1x. The game
-//! keeps rendering into its own surface, the client area is resized and
-//! the paint path stretches.
+//! Window scaling: ALT+- and ALT+= walk the scale ladder down and up,
+//! ALT+F9 resets to 1x. The game keeps rendering into its own surface,
+//! the client area is resized and the paint path stretches.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -10,9 +10,11 @@ use crate::cursor;
 use crate::log::log;
 use crate::render;
 
-/// The scale cycle, in ALT+F9 order.
-pub const SCALES: [f32; 3] = [1.0, 1.5, 2.0];
-static IDX: AtomicUsize = AtomicUsize::new(0);
+/// The scale ladder, small to large.
+pub const SCALES: [f32; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
+/// Index of 1.0, the startup and reset scale.
+const IDX_ONE: usize = 0;
+static IDX: AtomicUsize = AtomicUsize::new(IDX_ONE);
 
 /// The active scale factor.
 pub fn current() -> f32 {
@@ -30,15 +32,39 @@ pub fn client_wanted() -> (i32, i32) {
     )
 }
 
-/// ALT+F9: advances the cycle, resizes the window and re-applies the
-/// cursor clip for the new translation base.
-pub fn cycle(hwnd: HWND) {
-    let next = (IDX.load(Ordering::Relaxed) + 1) % SCALES.len();
-    IDX.store(next, Ordering::Relaxed);
+fn apply(hwnd: HWND) {
     let (cw, ch) = client_wanted();
     unsafe {
         render::set_client_size(hwnd, cw, ch);
     }
     cursor::apply_switch();
-    log(&format!("hotkey: ALT+F9 scale {} client {cw}x{ch}", SCALES[next]));
+    log(&format!("hotkey: scale {} client {cw}x{ch}", current()));
+}
+
+/// ALT+F9: back to 1x.
+pub fn reset(hwnd: HWND) {
+    IDX.store(IDX_ONE, Ordering::Relaxed);
+    apply(hwnd);
+}
+
+/// ALT+-: one ladder step down, clamped at the smallest scale.
+pub fn smaller(hwnd: HWND) {
+    let idx = IDX.load(Ordering::Relaxed);
+    if idx == 0 {
+        log(&format!("hotkey: ALT+- already at minimum {}", SCALES[0]));
+        return;
+    }
+    IDX.store(idx - 1, Ordering::Relaxed);
+    apply(hwnd);
+}
+
+/// ALT+=: one ladder step up, clamped at the largest scale.
+pub fn bigger(hwnd: HWND) {
+    let idx = IDX.load(Ordering::Relaxed);
+    if idx == SCALES.len() - 1 {
+        log(&format!("hotkey: ALT+= already at maximum {}", SCALES[SCALES.len() - 1]));
+        return;
+    }
+    IDX.store(idx + 1, Ordering::Relaxed);
+    apply(hwnd);
 }
