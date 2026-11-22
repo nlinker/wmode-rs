@@ -5,14 +5,14 @@
 //! patched in the game executable and remapped onto the window.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Mutex;
 
 use windows_sys::core::BOOL;
-use windows_sys::Win32::Foundation::{FALSE, HWND, POINT, RECT, TRUE};
+use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_MENU};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ClipCursor, GetClientRect, GetCursorPos, GetWindowRect, SetCursorPos,
+    ClipCursor, GetClientRect, GetCursorPos, SetCursorPos,
 };
 
 use crate::iat;
@@ -26,15 +26,11 @@ type ClipCursorFn = unsafe extern "system" fn(*const RECT) -> BOOL;
 static GET_OLD: AtomicU32 = AtomicU32::new(0);
 static SET_OLD: AtomicU32 = AtomicU32::new(0);
 static CLIP_OLD: AtomicU32 = AtomicU32::new(0);
-/// Last clip rect the game asked for, in game coordinates.
-static CLIP_REQUEST: Mutex<Option<RECT>> = Mutex::new(None);
 /// User switch for cursor clipping, the ALT+F1 state. Default off, per
 /// the sample ini.
 static CLIP_ENABLED: AtomicBool = AtomicBool::new(false);
-/// Holding ALT temporarily inverts the clip switch.
-static ALT_HELD: AtomicBool = AtomicBool::new(false);
-/// How many clip calls get logged before the diagnostic goes quiet.
-static LOG_BUDGET: AtomicU32 = AtomicU32::new(20);
+/// Last observed physical ALT state, to spot changes.
+static ALT_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Window geometry needed for translation, all in one snapshot.
 struct Map {
@@ -114,55 +110,6 @@ unsafe fn real_clip(rect: *const RECT) -> BOOL {
     }
 }
 
-/// Translates one clip rect from game coordinates to the screen, clamped
-/// to the client area, and applies it.
-unsafe fn apply_clip(rect: RECT) -> BOOL {
-    if let Some(m) = mapping() {
-        // a pre-translated caller already anchors the rect at the client
-        // origin, strip that anchor or the origin lands in twice
-        let mut r = rect;
-        if r.left == m.ox && r.top == m.oy {
-            r.left = 0;
-            r.top = 0;
-            r.right -= m.ox;
-            r.bottom -= m.oy;
-        }
-        let mut out = RECT {
-            left: m.ox + r.left * m.cw / m.gw,
-            top: m.oy + r.top * m.ch / m.gh,
-            right: m.ox + (r.right * m.cw + m.gw - 1) / m.gw,
-            bottom: m.oy + (r.bottom * m.ch + m.gh - 1) / m.gh,
-        };
-        out.left = out.left.max(m.ox);
-        out.top = out.top.max(m.oy);
-        out.right = out.right.min(m.ox + m.cw);
-        out.bottom = out.bottom.min(m.oy + m.ch);
-        log_clip(&rect, &out, &m);
-        if out.right > out.left && out.bottom > out.top {
-            return real_clip(&out);
-        }
-    }
-    real_clip(&rect)
-}
-
-/// One-shot diagnostic of the translation math.
-unsafe fn log_clip(req: &RECT, out: &RECT, m: &Map) {
-    let budget = LOG_BUDGET.load(Ordering::Relaxed);
-    if budget == 0 {
-        return;
-    }
-    LOG_BUDGET.store(budget - 1, Ordering::Relaxed);
-    let mut outer = RECT::default();
-    GetWindowRect(m.hwnd, &mut outer);
-    log(&format!(
-        "cursor: clip req {} {} {} {} -> {} {} {} {} client {}x{} game {}x{} origin {} {} window {} {} {} {}",
-        req.left, req.top, req.right, req.bottom,
-        out.left, out.top, out.right, out.bottom,
-        m.cw, m.ch, m.gw, m.gh, m.ox, m.oy,
-        outer.left, outer.top, outer.right, outer.bottom
-    ));
-}
-
 unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
     let res = real_get(point);
     if res == FALSE || point.is_null() {
@@ -189,16 +136,13 @@ unsafe extern "system" fn set_cursor_pos(x: i32, y: i32) -> BOOL {
 }
 
 unsafe extern "system" fn clip_cursor(rect: *const RECT) -> BOOL {
-    if rect.is_null() {
-        *CLIP_REQUEST.lock().unwrap() = None;
-        return real_clip(core::ptr::null());
+    if !render::windowed() {
+        return real_clip(rect);
     }
-    let rect = *rect;
-    *CLIP_REQUEST.lock().unwrap() = Some(rect);
-    if !clip_active() {
-        return real_clip(core::ptr::null());
-    }
-    apply_clip(rect)
+    // while windowed the clip is ours: game requests are swallowed and
+    // only the switch state decides, so the visible state always equals
+    // the flag (plus the ALT inversion), whatever the game asks for
+    TRUE
 }
 
 /// Whether the user wants the cursor confined, the ALT+F1 state.
@@ -210,33 +154,72 @@ pub fn set_clip_enabled(on: bool) {
     CLIP_ENABLED.store(on, Ordering::Relaxed);
 }
 
-/// The clip applies only with the switch on and ALT not held: holding
-/// ALT inverts the switch for as long as it is down.
-fn clip_active() -> bool {
-    CLIP_ENABLED.load(Ordering::Relaxed) != ALT_HELD.load(Ordering::Relaxed)
+/// Physical ALT state right now. Key events cannot be trusted here:
+/// the game swallows some ALT keyups and a remembered state sticks.
+fn alt_down() -> bool {
+    (unsafe { GetAsyncKeyState(VK_MENU as i32) } as u16) & 0x8000 != 0
 }
 
-/// ALT press or release: refreshes the clip when the effective state
-/// actually changed.
-pub fn set_alt_held(held: bool) {
-    if ALT_HELD.swap(held, Ordering::Relaxed) != held {
+/// The clip applies only with the switch on and ALT not held: holding
+/// ALT inverts the switch for as long as it is physically down.
+fn clip_active() -> bool {
+    CLIP_ENABLED.load(Ordering::Relaxed) != alt_down()
+}
+
+/// Brings the applied clip back in line when the physical ALT state
+/// changed since the last look.
+pub fn poll_alt() {
+    let down = alt_down();
+    if ALT_WAS_DOWN.swap(down, Ordering::Relaxed) != down {
         refresh_clip();
     }
 }
 
-/// Brings the applied cursor clip in line with the current switch
-/// state: re-applies the remembered game rect, or frees the cursor.
+/// Brings the cursor clip in line with the current switch state:
+/// confines the cursor to the game client area, or frees it.
 pub fn refresh_clip() {
-    let request = *CLIP_REQUEST.lock().unwrap();
+    apply_state(clip_active());
+}
+
+/// Applies the switch directly, ignoring the ALT inversion: the ALT+F1
+/// toggle must land immediately, not after the keys are released.
+pub fn apply_switch() {
+    apply_state(CLIP_ENABLED.load(Ordering::Relaxed));
+}
+
+fn apply_state(confine: bool) {
+    let m = unsafe { mapping() };
     unsafe {
-        if clip_active() {
-            if let Some(rect) = request {
-                apply_clip(rect);
+        match (confine, m) {
+            (true, Some(m)) => {
+                real_clip(&RECT {
+                    left: m.ox,
+                    top: m.oy,
+                    right: m.ox + m.cw,
+                    bottom: m.oy + m.ch,
+                });
             }
-        } else {
-            real_clip(core::ptr::null());
+            _ => {
+                real_clip(core::ptr::null());
+            }
         }
     }
+}
+
+/// Rescales mouse message coordinates from client pixels to game units
+/// while the client is not the game size. lParam packs two signed shorts.
+pub fn fix_points(lparam: LPARAM) -> LPARAM {
+    let Some(m) = (unsafe { mapping() }) else {
+        return lparam;
+    };
+    if m.cw == m.gw && m.ch == m.gh {
+        return lparam;
+    }
+    let x = (lparam as i32) as u16 as i32;
+    let y = (((lparam as i32) >> 16) & 0xFFFF) as u16 as i32;
+    let gx = (x * m.gw / m.cw).clamp(0, 0xFFFF as i32);
+    let gy = (y * m.gh / m.ch).clamp(0, 0xFFFF as i32);
+    ((gy << 16) | gx) as LPARAM
 }
 
 /// Patches the three cursor imports in the game executable. Returns true

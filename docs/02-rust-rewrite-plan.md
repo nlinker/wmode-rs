@@ -193,6 +193,18 @@ starts only after the review verdict — never auto-advance.
 - Step 8 (deferred to step 10): WM_MOUSEMOVE lParam scaling (the FixPoints part) is not
   needed while client == game size and lands together with the scale cycle.
 
+- Step 9: the hotkeys live in the subclass WM_SYSKEYDOWN arm. windows-sys type widths decided
+  the matching style: VK_* constants are u16 (matched via `wparam as u16`), HT_*/SC_* are u32
+  (`wparam as u32`). Every toggle logs a `hotkey:` line.
+- Step 9: the cursor clip switch defaults to OFF per the sample ini. While off, the game's own
+  ClipCursor requests are stored but answered with NULL. ALT inverts the switch for as long as
+  it is held (XOR); releasing ALT re-applies the clip immediately - the readme's deferred
+  activation (only when the cursor returns over the window) is a recorded deviation.
+- Step 9: ALT+F10 swallows WM_NCLBUTTONDOWN on HTCAPTION, ALT+F11 is a plain
+  TOPMOST/NOTOPMOST SetWindowPos, ALT+F12 greys SC_CLOSE/SC_MAXIMIZE/SC_MINIMIZE via
+  EnableMenuItem and swallows WM_SYSCOMMAND SC_CLOSE plus NC clicks on the caption buttons.
+  The screensaver half of the original ALT+F12 waits for step 13.
+
 ## Risks / open questions
 
 - **BWAPI interplay**: BWAPI's own W-Mode detects Xen W-Mode via `WS_SYSMENU` in the window

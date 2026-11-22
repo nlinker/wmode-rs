@@ -15,6 +15,7 @@ mod ini;
 mod inject;
 mod log;
 mod render;
+mod scale;
 mod window;
 
 use log::log;

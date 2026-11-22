@@ -5,18 +5,19 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_F1, VK_F10, VK_F11, VK_F12, VK_MENU};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_F1, VK_F10, VK_F11, VK_F12, VK_F9};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcA, DefWindowProcA, EnableMenuItem, GetSystemMenu, SetWindowLongA, SetWindowPos,
     GWL_WNDPROC, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HWND_NOTOPMOST, HWND_TOPMOST,
     MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SWP_NOMOVE,
-    SWP_NOSIZE, WM_DISPLAYCHANGE, WM_NCLBUTTONDOWN, WM_PAINT, WM_SIZE, WM_SYSCOMMAND,
-    WM_SYSKEYDOWN, WM_SYSKEYUP,
+    SWP_NOSIZE, WM_DISPLAYCHANGE, WM_MOUSEFIRST, WM_MOUSELAST, WM_MOUSEWHEEL,
+    WM_NCLBUTTONDOWN, WM_PAINT, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
 };
 
 use crate::cursor;
 use crate::log::log;
 use crate::render;
+use crate::scale;
 
 /// Original window procedure. SetWindowLongA flavor (i32, x86-safe).
 static ORIGINAL_PROC: AtomicI32 = AtomicI32::new(0);
@@ -75,7 +76,7 @@ unsafe extern "system" fn our_wnd_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
-    lparam: LPARAM,
+    mut lparam: LPARAM,
 ) -> LRESULT {
     let budget = LOG_BUDGET.load(Ordering::Relaxed);
     if budget > 0 {
@@ -93,20 +94,19 @@ unsafe extern "system" fn our_wnd_proc(
     }
     if msg == WM_SIZE && render::windowed() {
         if render::correct_client_size(hwnd) {
-            // the resize just changed the translation base, the applied
-            // clip rect is stale until the game asks again, so re-apply
-            // it right here
+            // the correction moved or resized the client box the cursor
+            // clip confines to, bring the applied clip back in line
             cursor::refresh_clip();
         }
     }
     if msg == WM_SYSKEYDOWN {
         // the VK_* constants are u16, so the key is matched in that width
         match wparam as u16 {
-            VK_MENU => cursor::set_alt_held(true),
+            VK_F9 => scale::cycle(hwnd),
             VK_F1 => {
                 let on = !cursor::clip_enabled();
                 cursor::set_clip_enabled(on);
-                cursor::refresh_clip();
+                cursor::apply_switch();
                 log(&format!("hotkey: ALT+F1 cursor clip {}", if on { "ON" } else { "OFF" }));
             }
             VK_F10 => {
@@ -132,8 +132,15 @@ unsafe extern "system" fn our_wnd_proc(
             _ => {}
         }
     }
-    if msg == WM_SYSKEYUP && wparam == VK_MENU as usize {
-        cursor::set_alt_held(false);
+    // mouse messages carry client pixels: rescale them to game units
+    // while the client is not the game size (the scale cycle). Wheel
+    // messages carry screen coordinates and stay untouched.
+    if render::windowed()
+        && msg >= WM_MOUSEFIRST
+        && msg <= WM_MOUSELAST
+        && msg != WM_MOUSEWHEEL
+    {
+        lparam = cursor::fix_points(lparam);
     }
     if msg == WM_NCLBUTTONDOWN {
         // the HT_* constants are u32, so the hit test is compared in that width

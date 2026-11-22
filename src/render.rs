@@ -196,13 +196,26 @@ pub fn activate_window(hwnd: HWND) {
     ));
 }
 
-/// Restores the client area to the game screen size. The game (or storm)
-/// keeps sizing the window to an outer 640x480, which the window frame
-/// eats into, so every WM_SIZE snaps the outer size back to game size
-/// plus frame. Returns true when a correction ran, false when the client
-/// already matched or the window is minimized or gone.
+/// Resizes the window so the client becomes cw x ch, keeping the top
+/// left corner inside the visible desktop.
+pub unsafe fn set_client_size(hwnd: HWND, cw: i32, ch: i32) {
+    let (ow, oh) = outer_size_for(hwnd, cw, ch);
+    let mut outer = RECT::default();
+    GetWindowRect(hwnd, &mut outer);
+    let cx = GetSystemMetrics(SM_CXSCREEN);
+    let cy = GetSystemMetrics(SM_CYSCREEN);
+    let x = outer.left.clamp(0, (cx - ow).max(0));
+    let y = outer.top.clamp(0, (cy - oh).max(0));
+    SetWindowPos(hwnd, core::ptr::null_mut(), x, y, ow, oh, SWP_NOZORDER);
+}
+
+/// Restores the client area to the scaled target size. The game (or
+/// storm) keeps sizing the window to an outer 640x480, which the window
+/// frame eats into, so every WM_SIZE snaps the outer size back to the
+/// wanted client plus frame. Returns true when a correction ran, false
+/// when the client already matched or the window is minimized or gone.
 pub unsafe fn correct_client_size(hwnd: HWND) -> bool {
-    let (want_w, want_h) = game_size();
+    let (want_w, want_h) = crate::scale::client_wanted();
     let mut client = RECT::default();
     GetClientRect(hwnd, &mut client);
     if client.right == want_w && client.bottom == want_h {
