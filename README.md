@@ -14,6 +14,12 @@ Getting started: `docs/00_get-started.md`.
 
 ## Build & deploy
 
+Just build the dll:
+```powershell
+cargo build --release --target i686-pc-windows-msvc
+```
+
+Build and copy to the destination:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1            # build + copy to Plugins
 powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -ClearLog  # also start a fresh %TEMP%\wmode-rs.log

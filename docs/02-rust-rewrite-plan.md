@@ -112,6 +112,8 @@ starts only after the review verdict — never auto-advance.
 | 12 | `MaxFps` throttle on the unlock→repaint path                                                                   | fps cap observable                                                                      |
 | 13 | `DisableControls` extras (ALT+F4 block, screensaver), desktop clamp                                            | manual checklist clean vs original                                                      |
 | 14 | `scripts\deploy.ps1` (build + copy `.bwl` into ChaosLauncher Plugins) + final parity checklist                 | one-command deploy; checklist signed off                                                |
+| 15 | plugin list info: version in the name, full hotkey description                                               | launcher plugin page shows both                                                          |
+| 16 | custom narrow black caption with icon buttons (clip state visible), original look                             | caption matches the original screenshot, buttons toggle features                        |
 
 ## Step notes (decisions taken during implementation)
 

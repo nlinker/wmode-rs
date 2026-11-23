@@ -19,12 +19,22 @@ const PLUGIN_API_VERSION: i32 = 4;
 /// StarCraft: Brood War 1.16.1.
 const STARCRAFT_BUILD: i32 = 13;
 
-/// Display name shown in the launcher plugin list.
-const NAME: &[u8] = b"wmode-rs";
-/// Description shown in the launcher plugin list.
+/// Display name shown in the launcher plugin list, version included.
+const NAME: &[u8] = concat!("WMode-rs ", env!("CARGO_PKG_VERSION")).as_bytes();
+/// Description shown in the launcher plugin list: the full hotkey set.
 const DESCRIPTION: &[u8] = b"Windowed mode plugin for StarCraft: Brood War 1.16.1.\r\n\
-     ALT+- / ALT+= scale down and up, ALT+F9 resets to 1x.\r\n\
-     Rust rewrite of W-MODE v1.02 by XeNotRoN (2008)";
+     Rust rewrite of W-MODE v1.02 by XeNotRoN (2008).\r\n\
+     \r\n\
+     Hotkeys:\r\n\
+     ALT+F1   cursor clip on/off\r\n\
+     ALT+- / ALT+=   window scale down/up [1.0..2.0]\r\n\
+     ALT+F9   reset scale to 1x\r\n\
+     ALT+F10  window move on/off\r\n\
+     ALT+F11  always-on-top on/off\r\n\
+     ALT+F12  caption buttons on/off (also blocks ALT+F4 and disables\r\n\
+     the screensaver while the game is focused)\r\n\
+     \r\n\
+     Config: wmode.ini in the StarCraft folder (MaxFps, Scale, Save*).";
 
 /// Copies `src` into a launcher-provided NUL-terminated buffer, truncating
 /// to `cap - 1` bytes. Never writes past `cap`.
