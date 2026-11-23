@@ -4,14 +4,14 @@
 //! still owned the whole screen, so the three user32 imports it calls get
 //! patched in the game executable and remapped onto the window.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ClipCursor, GetClientRect, GetCursorPos, GetForegroundWindow, SetCursorPos,
+    ClipCursor, GetClientRect, GetCursorPos, GetForegroundWindow, IsIconic, SetCursorPos,
 };
 
 use crate::iat;
@@ -28,13 +28,6 @@ static CLIP_OLD: AtomicU32 = AtomicU32::new(0);
 /// User switch for cursor clipping, the ALT+F1 state. Default off, per
 /// the sample ini.
 static CLIP_ENABLED: AtomicBool = AtomicBool::new(false);
-/// Diagnostic mouse log: how many samples are left before it goes quiet.
-static MOUSE_LOG_BUDGET: AtomicU32 = AtomicU32::new(400);
-/// Total GetCursorPos calls seen, for sampling the log.
-static MOUSE_CALLS: AtomicU32 = AtomicU32::new(0);
-/// Last logged screen position, to skip samples where nothing moved.
-static MOUSE_X: AtomicI32 = AtomicI32::new(i32::MIN);
-static MOUSE_Y: AtomicI32 = AtomicI32::new(i32::MIN);
 
 /// Window geometry needed for translation, all in one snapshot.
 struct Map {
@@ -51,13 +44,15 @@ struct Map {
 }
 
 /// Collects the translation snapshot, or None while the window does not
-/// exist yet or windowed mode is off (calls then pass through unchanged).
+/// exist yet, is minimized (Windows parks it at -32000 with a stub
+/// geometry whose ClientToScreen lands far off screen) or windowed mode
+/// is off (calls then pass through unchanged).
 unsafe fn mapping() -> Option<Map> {
     if !render::windowed() {
         return None;
     }
     let hwnd = render::game_hwnd();
-    if hwnd.is_null() {
+    if hwnd.is_null() || IsIconic(hwnd) != 0 {
         return None;
     }
     let mut client = RECT::default();
@@ -120,9 +115,18 @@ unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
         return res;
     }
     let Some(m) = mapping() else {
+        // windowed but minimized: the game keeps polling, feed it the
+        // center like the unfocused branch below instead of raw screen
+        // coordinates from the stub geometry
+        if render::windowed() {
+            let (gw, gh) = render::game_size();
+            if gw > 0 && gh > 0 {
+                (*point).x = gw / 2;
+                (*point).y = gh / 2;
+            }
+        }
         return res;
     };
-    let (sx, sy) = ((*point).x, (*point).y);
     let focused = GetForegroundWindow() == m.hwnd;
     // a focused game sees the real cursor, clamped to the game rect so
     // edge scrolling never stalls. An unfocused game always sees the
@@ -142,40 +146,23 @@ unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
         (*point).x = m.gw / 2;
         (*point).y = m.gh / 2;
     }
-    debug_mouse(&m, sx, sy, (*point).x, (*point).y, focused);
     TRUE
 }
 
-/// Diagnostic sample: screen position (absolute), position relative to
-/// the StarCraft client area, and the game coordinates the hook handed
-/// out. The game polls every frame, so only every 8th changed position
-/// gets logged, until the budget runs out.
-fn debug_mouse(m: &Map, sx: i32, sy: i32, gx: i32, gy: i32, focused: bool) {
-    let calls = MOUSE_CALLS.fetch_add(1, Ordering::Relaxed);
-    if MOUSE_X.load(Ordering::Relaxed) == sx && MOUSE_Y.load(Ordering::Relaxed) == sy {
-        return;
-    }
-    MOUSE_X.store(sx, Ordering::Relaxed);
-    MOUSE_Y.store(sy, Ordering::Relaxed);
-    if calls % 8 != 0 {
-        return;
-    }
-    let budget = MOUSE_LOG_BUDGET.fetch_sub(1, Ordering::Relaxed);
-    if budget == 0 {
-        MOUSE_LOG_BUDGET.store(0, Ordering::Relaxed);
-        return;
-    }
-    log(&format!(
-        "mouse: screen ({sx},{sy}) client ({},{}) game ({gx},{gy}) fg={} clip={}",
-        sx - m.ox,
-        sy - m.oy,
-        focused as u8,
-        clip_enabled()
-    ));
-}
-
 unsafe extern "system" fn set_cursor_pos(x: i32, y: i32) -> BOOL {
-    if let Some(m) = mapping() {
+    if render::windowed() {
+        let Some(m) = mapping() else {
+            // windowed but the client is not measurable right now (minimized
+            // or mid-restore): swallow the call, passing raw game coordinates
+            // through would warp the physical cursor to the screen origin
+            return TRUE;
+        };
+        // an unfocused game must not move the physical cursor: it keeps
+        // recentering while deactivated and would yank the user's mouse
+        // out of whatever application holds the focus
+        if GetForegroundWindow() != m.hwnd {
+            return TRUE;
+        }
         let mut pt = POINT {
             x: x * m.cw / m.gw,
             y: y * m.ch / m.gh,

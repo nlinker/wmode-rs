@@ -56,6 +56,7 @@ unsafe extern "system" fn sdraw_unlock(
     rect: *mut RECT,
 ) -> BOOL {
     if render::unlock() {
+        crate::window::arrow_frame_check();
         return TRUE;
     }
     let old = UNLOCK_OLD.load(Ordering::Acquire);

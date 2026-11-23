@@ -4,17 +4,27 @@
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    ClientToScreen, CreatePen, CreateSolidBrush, DeleteObject, FillRect, GetStockObject,
+    GetWindowDC, HDC, LineTo, MoveToEx, RedrawWindow, ReleaseDC, SelectObject, SetBkMode,
+    SetTextColor, TextOutA, DEFAULT_GUI_FONT, PS_SOLID, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+    TRANSPARENT,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_F1, VK_F10, VK_F11, VK_F12, VK_F9, VK_OEM_MINUS, VK_OEM_PLUS,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcA, DefWindowProcA, EnableMenuItem, GetSystemMenu, SetWindowLongA, SetWindowPos,
-    SystemParametersInfoA, GWL_WNDPROC, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
-    HWND_NOTOPMOST, HWND_TOPMOST, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, SC_CLOSE, SC_MAXIMIZE,
-    SC_MINIMIZE, SPI_GETSCREENSAVEACTIVE, SPI_SETSCREENSAVEACTIVE, SWP_NOMOVE, ShowCursor,
-    SWP_NOSIZE, WA_INACTIVE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_DISPLAYCHANGE, WM_MOUSEFIRST,
-    WM_MOUSELAST, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCLBUTTONDOWN, WM_NCMOUSEMOVE,
+    CallWindowProcA, DefWindowProcA, EnableMenuItem, GetSystemMenu, GetWindowRect, LoadCursorW,
+    PostMessageA, SetCursor, SetWindowLongA, SetWindowPos, ShowWindow, SystemParametersInfoA,
+    GWL_WNDPROC, IDC_ARROW, WM_SETCURSOR,
+    HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HWND_NOTOPMOST, HWND_TOPMOST, MF_BYCOMMAND,
+    MF_ENABLED, MF_GRAYED, SC_CLOSE, SC_MAXIMIZE,
+    SC_MINIMIZE, SPI_GETSCREENSAVEACTIVE, SPI_SETSCREENSAVEACTIVE, SW_MINIMIZE, SWP_NOMOVE,
+    ShowCursor, SWP_NOSIZE, GetClientRect, GetCursorPos, WA_INACTIVE, WM_ACTIVATE, WM_ACTIVATEAPP,
+    WM_DISPLAYCHANGE,
+    WM_MOUSEFIRST, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCPAINT,
+    WM_MOUSELAST, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCMOUSEMOVE,
     WM_PAINT, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
 };
 
@@ -33,10 +43,6 @@ static MOVE_ENABLED: AtomicBool = AtomicBool::new(true);
 static TOPMOST: AtomicBool = AtomicBool::new(false);
 /// Caption buttons (close, maximize, minimize) active, the ALT+F12 state.
 static CAPTION_CONTROLS: AtomicBool = AtomicBool::new(true);
-/// Whether the arrow cursor is currently hidden by us. The game hides
-/// the system cursor while it renders its own, over the caption nothing
-/// renders it, so we show the arrow there.
-static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(true);
 /// Last known client position, cached on every move: the exit save runs
 /// in DLL_PROCESS_DETACH where window queries are off limits.
 static WINDOW_CLIENT_X: AtomicI32 = AtomicI32::new(-1);
@@ -44,13 +50,15 @@ static WINDOW_CLIENT_Y: AtomicI32 = AtomicI32::new(-1);
 /// True while we turned the screensaver off and owe a restore.
 static SCREENSAVER_OFF: AtomicBool = AtomicBool::new(false);
 
-/// Shows or hides the arrow cursor, one ShowCursor call per state change.
+/// Shows or hides the arrow cursor. The call saturates the ShowCursor
+/// counter instead of stepping it once: the game keeps hiding the OS
+/// cursor every frame while it draws its own, so a single step loses.
+/// Over the caption (nonclient) the arrow must win, over the client the
+/// game cursor does.
 fn set_cursor_show(show: bool) {
-    if show == CURSOR_HIDDEN.load(Ordering::Relaxed) {
-        unsafe {
-            ShowCursor(show as i32);
-        }
-        CURSOR_HIDDEN.store(!show, Ordering::Relaxed);
+    let mut count = unsafe { ShowCursor(show as i32) };
+    while (show && count < 0) || (!show && count > 0) {
+        count = unsafe { ShowCursor(show as i32) };
     }
 }
 
@@ -106,6 +114,255 @@ unsafe fn screensaver_restore() {
         SystemParametersInfoA(SPI_SETSCREENSAVEACTIVE, 1, core::ptr::null_mut(), 0);
         log("window: screensaver restored");
     }
+}
+
+// Custom caption: a narrow black bar with a red frame and a row of state
+// buttons, painted instead of the standard frame (original W-MODE look).
+
+/// Caption button size and spacing.
+const BTN: i32 = 12;
+const BTN_GAP: i32 = 2;
+const BTN_COUNT: usize = 6;
+/// Hit-test codes for the caption buttons, kept clear of the HT_* range.
+const HT_BTN_FIRST: usize = 0x100;
+const HT_BTN_CLIP: usize = HT_BTN_FIRST;
+const HT_BTN_MOVE: usize = HT_BTN_FIRST + 1;
+const HT_BTN_TOPMOST: usize = HT_BTN_FIRST + 2;
+const HT_BTN_CONTROLS: usize = HT_BTN_FIRST + 3;
+const HT_BTN_MIN: usize = HT_BTN_FIRST + 4;
+// HT_BTN_FIRST + 5 is the close button, handled by the wildcard arm
+
+fn rgb(r: u32, g: u32, b: u32) -> u32 {
+    r | (g << 8) | (b << 16)
+}
+
+/// Button boxes in window coordinates, right to left on the bar: close,
+/// minimize, controls, topmost, move, clip.
+fn button_rects(w: i32) -> [RECT; BTN_COUNT] {
+    let y = render::FRAME + (render::BAR_H - BTN) / 2;
+    let mut x = w - render::FRAME - BTN;
+    let mut out = [RECT::default(); BTN_COUNT];
+    let mut i = BTN_COUNT;
+    while i > 0 {
+        i -= 1;
+        out[i] = RECT {
+            left: x,
+            top: y,
+            right: x + BTN,
+            bottom: y + BTN,
+        };
+        x -= BTN + BTN_GAP;
+    }
+    out
+}
+
+/// Repaints the caption bar and border after a state change.
+unsafe fn redraw_frame(hwnd: HWND) {
+    RedrawWindow(
+        hwnd,
+        core::ptr::null(),
+        core::ptr::null_mut(),
+        RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW,
+    );
+}
+
+/// One 1-pixel line with the currently selected pen.
+unsafe fn line(hdc: HDC, x1: i32, y1: i32, x2: i32, y2: i32) {
+    MoveToEx(hdc, x1, y1, core::ptr::null_mut());
+    LineTo(hdc, x2, y2);
+}
+
+/// Paints the whole custom nonclient: the red border, the black caption
+/// bar with the title, and the button row with its state glyphs.
+unsafe fn paint_frame(hwnd: HWND) {
+    let hdc = GetWindowDC(hwnd);
+    let mut wr = RECT::default();
+    GetWindowRect(hwnd, &mut wr);
+    let w = wr.right - wr.left;
+    let h = wr.bottom - wr.top;
+    if w > 0 && h > 0 {
+        let red = CreateSolidBrush(rgb(150, 0, 0));
+        let black = CreateSolidBrush(rgb(0, 0, 0));
+        FillRect(hdc, &RECT { left: 0, top: 0, right: w, bottom: render::FRAME }, red);
+        FillRect(hdc, &RECT { left: 0, top: h - render::FRAME, right: w, bottom: h }, red);
+        FillRect(hdc, &RECT { left: 0, top: 0, right: render::FRAME, bottom: h }, red);
+        FillRect(hdc, &RECT { left: w - render::FRAME, top: 0, right: w, bottom: h }, red);
+        FillRect(
+            hdc,
+            &RECT {
+                left: render::FRAME,
+                top: render::FRAME,
+                right: w - render::FRAME,
+                bottom: render::FRAME + render::BAR_H,
+            },
+            black,
+        );
+        SetBkMode(hdc, TRANSPARENT as i32);
+        SetTextColor(hdc, rgb(200, 200, 200));
+        let old_font = SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+        let title = b"StarCraft";
+        TextOutA(
+            hdc,
+            render::FRAME + 4,
+            render::FRAME + (render::BAR_H - 9) / 2,
+            title.as_ptr(),
+            title.len() as i32,
+        );
+        SelectObject(hdc, old_font);
+
+        let dim = !CAPTION_CONTROLS.load(Ordering::Relaxed);
+        let grey = rgb(110, 110, 110);
+        let off = rgb(90, 90, 90);
+        let green = rgb(0, 210, 0);
+        let boxbrush = CreateSolidBrush(rgb(35, 35, 35));
+        // every stateful button carries its own on/off color: bright while
+        // its switch is on, dim while off, grey all over while the caption
+        // controls are disabled
+        let pen_on = CreatePen(PS_SOLID, 1, green);
+        let pen_off = CreatePen(PS_SOLID, 1, off);
+        let pen_grey = CreatePen(PS_SOLID, 1, grey);
+        let red_pen = CreatePen(PS_SOLID, 1, if dim { grey } else { rgb(200, 40, 40) });
+        let old_pen = SelectObject(hdc, pen_grey);
+        for (i, b) in button_rects(w).iter().enumerate() {
+            let on = match HT_BTN_FIRST + i {
+                HT_BTN_CLIP => cursor::clip_enabled(),
+                HT_BTN_MOVE => move_enabled(),
+                HT_BTN_TOPMOST => topmost(),
+                _ => true,
+            };
+            let pen = if dim { pen_grey } else if on { pen_on } else { pen_off };
+            SelectObject(hdc, pen);
+            FillRect(hdc, b, boxbrush);
+            let cx = (b.left + b.right) / 2;
+            let cy = (b.top + b.bottom) / 2;
+            match HT_BTN_FIRST + i {
+                HT_BTN_CLIP => {
+                    // filled center square mirrors the switch state
+                    let fill = if dim { grey } else if on { green } else { off };
+                    let brush = CreateSolidBrush(fill);
+                    FillRect(hdc, &RECT { left: cx - 3, top: cy - 3, right: cx + 3, bottom: cy + 3 }, brush);
+                    DeleteObject(brush);
+                }
+                HT_BTN_MOVE => {
+                    line(hdc, cx - 4, cy, cx + 4, cy);
+                    line(hdc, cx - 4, cy, cx - 2, cy - 2);
+                    line(hdc, cx - 4, cy, cx - 2, cy + 2);
+                    line(hdc, cx + 4, cy, cx + 2, cy - 2);
+                    line(hdc, cx + 4, cy, cx + 2, cy + 2);
+                }
+                HT_BTN_TOPMOST => {
+                    line(hdc, cx, cy + 4, cx, cy - 4);
+                    line(hdc, cx, cy - 4, cx - 2, cy - 2);
+                    line(hdc, cx, cy - 4, cx + 2, cy - 2);
+                }
+                HT_BTN_CONTROLS => {
+                    for dy in [-3, 0, 3] {
+                        line(hdc, cx - 4, cy + dy, cx + 4, cy + dy);
+                    }
+                }
+                HT_BTN_MIN => {
+                    line(hdc, cx - 4, cy + 3, cx + 4, cy + 3);
+                }
+                _ => {
+                    let old = SelectObject(hdc, red_pen);
+                    line(hdc, cx - 3, cy - 3, cx + 3, cy + 3);
+                    line(hdc, cx - 3, cy + 3, cx + 3, cy - 3);
+                    SelectObject(hdc, old);
+                }
+            }
+        }
+        SelectObject(hdc, old_pen);
+        DeleteObject(boxbrush);
+        DeleteObject(pen_on);
+        DeleteObject(pen_off);
+        DeleteObject(pen_grey);
+        DeleteObject(red_pen);
+        DeleteObject(red);
+        DeleteObject(black);
+    }
+    ReleaseDC(hwnd, hdc);
+}
+
+/// Whether the physical cursor sits over the window frame (caption bar
+/// or border) rather than the client area.
+unsafe fn cursor_over_frame(hwnd: HWND) -> bool {
+    let mut pt = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut pt) } == 0 {
+        return false;
+    }
+    let mut wr = RECT::default();
+    GetWindowRect(hwnd, &mut wr);
+    let mut cr = RECT::default();
+    GetClientRect(hwnd, &mut cr);
+    let mut tl = POINT { x: cr.left, y: cr.top };
+    let mut br = POINT { x: cr.right, y: cr.bottom };
+    ClientToScreen(hwnd, &mut tl);
+    ClientToScreen(hwnd, &mut br);
+    pt.x >= wr.left
+        && pt.x < wr.right
+        && pt.y >= wr.top
+        && pt.y < wr.bottom
+        && !(pt.x >= tl.x && pt.x < br.x && pt.y >= tl.y && pt.y < br.y)
+}
+
+/// Per-frame arrow decision by cursor position. The game re-hides the OS
+/// cursor when it regains focus or enters its screens, so whoever speaks
+/// last wins - this runs at the end of every frame and makes the arrow
+/// over the frame win within one frame.
+pub fn arrow_frame_check() {
+    let hwnd = render::game_hwnd();
+    if hwnd.is_null() {
+        return;
+    }
+    let over_frame = unsafe { cursor_over_frame(hwnd) };
+    if over_frame {
+        // the game nulls the cursor handle even over our caption, and
+        // ShowCursor cannot fix a nulled handle - set the arrow explicitly
+        unsafe {
+            SetCursor(LoadCursorW(core::ptr::null_mut(), IDC_ARROW));
+        }
+    }
+    set_cursor_show(over_frame);
+}
+
+/// Toggles the cursor clip switch, from the hotkey or the caption button.
+unsafe fn toggle_clip(hwnd: HWND) {
+    let on = !cursor::clip_enabled();
+    cursor::set_clip_enabled(on);
+    cursor::refresh_clip();
+    log(&format!("hotkey: ALT+F1 cursor clip {}", if on { "ON" } else { "OFF" }));
+    redraw_frame(hwnd);
+}
+
+/// Toggles window dragging.
+unsafe fn toggle_move(hwnd: HWND) {
+    let on = !move_enabled();
+    MOVE_ENABLED.store(on, Ordering::Relaxed);
+    log(&format!("hotkey: ALT+F10 window move {}", if on { "ON" } else { "OFF" }));
+    redraw_frame(hwnd);
+}
+
+/// Toggles always-on-top.
+unsafe fn toggle_topmost(hwnd: HWND) {
+    let on = !topmost();
+    TOPMOST.store(on, Ordering::Relaxed);
+    apply_topmost(hwnd);
+    log(&format!("hotkey: ALT+F11 always on top {}", if on { "ON" } else { "OFF" }));
+    redraw_frame(hwnd);
+}
+
+/// Toggles the caption controls and the screensaver guard with them.
+unsafe fn toggle_controls(hwnd: HWND) {
+    let on = !caption_controls();
+    CAPTION_CONTROLS.store(on, Ordering::Relaxed);
+    apply_caption_controls(hwnd);
+    if on {
+        screensaver_restore();
+    } else {
+        screensaver_disable();
+    }
+    log(&format!("hotkey: ALT+F12 caption buttons {}", if on { "ON" } else { "OFF" }));
+    redraw_frame(hwnd);
 }
 
 /// Applies a loaded ini config to the toggle states and the window.
@@ -204,12 +461,67 @@ unsafe extern "system" fn our_wnd_proc(
     if msg == WM_MOVE {
         remember_client_pos(hwnd);
     }
+    if msg == WM_NCCALCSIZE && wparam != 0 && render::windowed() {
+        // carve the custom frame out of the window box: the bar on top,
+        // the border on the other three sides
+        let rct = lparam as *mut RECT;
+        (*rct).left += render::FRAME;
+        (*rct).top += render::FRAME + render::BAR_H;
+        (*rct).right -= render::FRAME;
+        (*rct).bottom -= render::FRAME;
+        return 0;
+    }
+    if msg == WM_NCPAINT && render::windowed() {
+        paint_frame(hwnd);
+        return 0;
+    }
+    if msg == WM_NCHITTEST && render::windowed() {
+        // lParam packs the cursor position in screen coordinates
+        let mut wr = RECT::default();
+        GetWindowRect(hwnd, &mut wr);
+        let x = ((lparam as i32) & 0xFFFF) as i16 as i32 - wr.left;
+        let y = (((lparam as i32) >> 16) & 0xFFFF) as i16 as i32 - wr.top;
+        if y >= render::FRAME && y < render::FRAME + render::BAR_H {
+            for (i, b) in button_rects(wr.right - wr.left).iter().enumerate() {
+                if x >= b.left && x < b.right && y >= b.top && y < b.bottom {
+                    return (HT_BTN_FIRST + i) as LRESULT;
+                }
+            }
+            return HTCAPTION as LRESULT;
+        }
+    }
+    if msg == WM_NCLBUTTONDOWN {
+        let hit = wparam as usize;
+        if (HT_BTN_FIRST..HT_BTN_FIRST + BTN_COUNT).contains(&hit) {
+            // like the original: the icons go grey and inert while the
+            // caption controls are off, only the hotkeys keep working
+            if CAPTION_CONTROLS.load(Ordering::Relaxed) {
+                match hit {
+                    HT_BTN_CLIP => toggle_clip(hwnd),
+                    HT_BTN_MOVE => toggle_move(hwnd),
+                    HT_BTN_TOPMOST => toggle_topmost(hwnd),
+                    HT_BTN_CONTROLS => toggle_controls(hwnd),
+                    HT_BTN_MIN => {
+                        ShowWindow(hwnd, SW_MINIMIZE);
+                    }
+                    _ => {
+                        PostMessageA(hwnd, WM_SYSCOMMAND, SC_CLOSE as usize, 0);
+                    }
+                }
+            }
+            return 0;
+        }
+    }
     if msg == WM_ACTIVATE {
         if wparam as u32 & 0xFFFF != WA_INACTIVE {
             // the system drops ClipCursor confinement when the window
             // deactivates: bring it back on every activation while the
             // switch is on, or Alt+Tab leaves the cursor free forever
             cursor::refresh_clip();
+            // the game left the arrow hidden before deactivation and no
+            // NC mouse move will come until the mouse moves: decide the
+            // arrow state from where the cursor sits right now
+            set_cursor_show(unsafe { cursor_over_frame(hwnd) });
             // the screensaver half of DisableControls: off while the
             // game window is the foreground one
             if !CAPTION_CONTROLS.load(Ordering::Relaxed) {
@@ -235,37 +547,10 @@ unsafe extern "system" fn our_wnd_proc(
             VK_F9 => scale::reset(hwnd),
             VK_OEM_MINUS => scale::smaller(hwnd),
             VK_OEM_PLUS => scale::bigger(hwnd),
-            VK_F1 => {
-                let on = !cursor::clip_enabled();
-                cursor::set_clip_enabled(on);
-                cursor::refresh_clip();
-                log(&format!("hotkey: ALT+F1 cursor clip {}", if on { "ON" } else { "OFF" }));
-            }
-            VK_F10 => {
-                let on = !MOVE_ENABLED.load(Ordering::Relaxed);
-                MOVE_ENABLED.store(on, Ordering::Relaxed);
-                log(&format!("hotkey: ALT+F10 window move {}", if on { "ON" } else { "OFF" }));
-            }
-            VK_F11 => {
-                let on = !TOPMOST.load(Ordering::Relaxed);
-                TOPMOST.store(on, Ordering::Relaxed);
-                apply_topmost(hwnd);
-                log(&format!("hotkey: ALT+F11 always on top {}", if on { "ON" } else { "OFF" }));
-            }
-            VK_F12 => {
-                let on = !CAPTION_CONTROLS.load(Ordering::Relaxed);
-                CAPTION_CONTROLS.store(on, Ordering::Relaxed);
-                apply_caption_controls(hwnd);
-                if on {
-                    screensaver_restore();
-                } else {
-                    screensaver_disable();
-                }
-                log(&format!(
-                    "hotkey: ALT+F12 caption buttons {}",
-                    if on { "ON" } else { "OFF" }
-                ));
-            }
+            VK_F1 => toggle_clip(hwnd),
+            VK_F10 => toggle_move(hwnd),
+            VK_F11 => toggle_topmost(hwnd),
+            VK_F12 => toggle_controls(hwnd),
             _ => {}
         }
     }
@@ -282,11 +567,20 @@ unsafe extern "system" fn our_wnd_proc(
         }
         return DefWindowProcA(hwnd, msg, 1, 0);
     }
-    if msg == WM_NCMOUSEMOVE {
-        set_cursor_show(true);
+    if msg == WM_SETCURSOR && render::windowed() && unsafe { cursor_over_frame(hwnd) } {
+        // the game's WM_SETCURSOR handling nulls the cursor over the
+        // whole window including our caption: answer for the frame zone
+        // ourselves before it runs
+        unsafe {
+            SetCursor(LoadCursorW(core::ptr::null_mut(), IDC_ARROW));
+        }
+        return 1;
     }
-    if msg == WM_MOUSEMOVE {
-        set_cursor_show(false);
+    if msg == WM_MOUSEMOVE || msg == WM_NCMOUSEMOVE {
+        // decide by geometry, not message flavor: the game captures the
+        // mouse in its menus, and captured moves over the caption arrive
+        // as plain WM_MOUSEMOVE, never as a nonclient message
+        set_cursor_show(unsafe { cursor_over_frame(hwnd) });
     }
     // mouse messages carry client pixels: rescale them to game units
     // while the client is not the game size (the scale cycle). Wheel

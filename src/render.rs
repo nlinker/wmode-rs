@@ -13,9 +13,9 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, GetClientRect, GetSystemMetrics, GetWindowLongA, GetWindowRect,
-    SetWindowLongA, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, SM_CXSCREEN,
-    SM_CYSCREEN, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_OVERLAPPEDWINDOW,
+    GetClientRect, GetSystemMetrics, GetWindowRect, IsIconic, SetWindowLongA, SetWindowPos,
+    GWL_STYLE, HWND_NOTOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, WS_POPUP, WS_SYSMENU,
 };
 
 use crate::log::log;
@@ -77,20 +77,16 @@ pub fn game_size() -> (i32, i32) {
     )
 }
 
-/// Outer window size that yields a client of cw x ch under the window
-/// styles currently set. Computed from the style flags alone, the frame
-/// does not have to be applied to the window yet.
-unsafe fn outer_size_for(hwnd: HWND, cw: i32, ch: i32) -> (i32, i32) {
-    let style = GetWindowLongA(hwnd, GWL_STYLE) as u32;
-    let ex = GetWindowLongA(hwnd, GWL_EXSTYLE) as u32;
-    let mut r = RECT {
-        left: 0,
-        top: 0,
-        right: cw,
-        bottom: ch,
-    };
-    AdjustWindowRectEx(&mut r, style, 0, ex);
-    (r.right - r.left, r.bottom - r.top)
+/// Custom nonclient metrics: the narrow caption bar height and the frame
+/// border width, painted by the window subclass.
+pub const BAR_H: i32 = 18;
+pub const FRAME: i32 = 3;
+
+/// Outer window size that yields a client of cw x ch under the custom
+/// popup frame: the bar on top, the border around. Constant math, no
+/// live style measuring (a just-restyled window reports stale metrics).
+unsafe fn outer_size_for(_hwnd: HWND, cw: i32, ch: i32) -> (i32, i32) {
+    (cw + FRAME * 2, ch + BAR_H + FRAME)
 }
 
 /// Creates the DIB surface for the given game size, replacing any previous
@@ -174,8 +170,11 @@ pub fn activate_window(hwnd: HWND) {
     let width = DEFAULT_WIDTH;
     let height = DEFAULT_HEIGHT;
     GAME_HWND.store(hwnd, Ordering::Release);
+    // flag the render path active before the resize so the very first
+    // WM_NCCALCSIZE already carves out the custom bar and border
+    WINDOWED.store(true, Ordering::Release);
     unsafe {
-        SetWindowLongA(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW as i32);
+        SetWindowLongA(hwnd, GWL_STYLE, (WS_POPUP | WS_SYSMENU) as i32);
         let (ow, oh) = outer_size_for(hwnd, width, height);
         let cx = GetSystemMetrics(SM_CXSCREEN);
         let cy = GetSystemMetrics(SM_CYSCREEN);
@@ -189,7 +188,6 @@ pub fn activate_window(hwnd: HWND) {
             SWP_SHOWWINDOW,
         );
     }
-    WINDOWED.store(true, Ordering::Release);
     DIRTY.store(true, Ordering::Release);
     let mut client = RECT::default();
     let mut outer = RECT::default();
@@ -261,6 +259,11 @@ pub unsafe fn set_client_size(hwnd: HWND, cw: i32, ch: i32) {
 /// wanted client plus frame. Returns true when a correction ran, false
 /// when the client already matched or the window is minimized or gone.
 pub unsafe fn correct_client_size(hwnd: HWND) -> bool {
+    if IsIconic(hwnd) != 0 {
+        // a minimized window carries stub geometry (client 1232x26 at
+        // -32000), correcting it would resize the parked placeholder
+        return false;
+    }
     let (want_w, want_h) = crate::scale::client_wanted();
     let mut client = RECT::default();
     GetClientRect(hwnd, &mut client);

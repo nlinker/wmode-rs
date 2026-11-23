@@ -281,6 +281,43 @@ starts only after the review verdict — never auto-advance.
   returns 0, nothing to disable or restore) - verifying the guard visibly
   needs a screensaver enabled in Windows first.
 
+- Step 15: the plugin list name now carries the crate version
+  (`concat!` with `CARGO_PKG_VERSION`, so it follows Cargo.toml), and the
+  description lists the full hotkey set plus the ini pointer. Steps 16+
+  (custom caption, icon buttons) were added to the step table by user
+  request after the 0-14 ladder closed.
+
+- Step 16: custom caption in the original's style. The window style became
+  `WS_POPUP | WS_SYSMENU`, `WM_NCCALCSIZE` carves a 18 px bar plus a 3 px
+  border (constants `BAR_H`/`FRAME` in render.rs; outer-size math is now
+  constant-based, `AdjustWindowRectEx` dropped), `WM_NCPAINT` paints the
+  red frame, black bar, title and a button row (clip, move, topmost,
+  controls, minimize, close, codes 0x100+), `WM_NCHITTEST` serves the bar
+  as HTCAPTION and the buttons, button clicks call the same toggle
+  functions as the hotkeys, glyphs carry per-switch on/off colors and the
+  whole row goes grey and inert while the caption controls are off.
+- Step 16 (cursor battles, all verified against the log): the game hides
+  the OS cursor in three ways, each needing its own counter. (1) repeated
+  `ShowCursor(FALSE)` - countered by saturating the counter instead of a
+  single step. (2) `SetCapture` in menus: captured moves over the caption
+  arrive as plain `WM_MOUSEMOVE`, nonclient messages never come - countered
+  by deciding from the physical cursor position (window rect vs client
+  rect), not from the message flavor, on every mouse message and at the
+  end of every frame (`SDrawUnlockSurface` tail calls arrow_frame_check,
+  so the arrow over the frame wins within one frame). (3) `SetCursor(NULL)`
+  on focus switches, which no ShowCursor amount can fix - countered by
+  intercepting `WM_SETCURSOR` over the frame and by `SetCursor(IDC_ARROW)`
+  in the frame check. On `WM_ACTIVATE` the arrow state is re-derived from
+  the cursor position.
+- Step 16 (minimize/restore): Windows parks a minimized window at -32000
+  with stub geometry (client 1232x26). correct_client_size skips iconic
+  windows, mapping() rejects them, GetCursorPos feeds the game its center
+  while minimized, and SetCursorPos is swallowed both when unmeasurable
+  and while unfocused (the game recenters the physical cursor on
+  deactivate/refocus, which warped it into the screen corner or yanked it
+  out of the focused app). The hunt-only diagnostics (mouse/setcursor/
+  arrow sample logs) were removed before commit.
+
 ## Risks / open questions
 
 - **BWAPI interplay**: BWAPI's own W-Mode detects Xen W-Mode via `WS_SYSMENU` in the window
