@@ -1,9 +1,9 @@
 # Reverse-engineering expedition into wmode.bwl
 
-Date: 2026-11-22 (expedition), 2026-11-23 (this write-up). Scope: the attempt to
-unpack `original\wmode.bwl` down to the real W-MODE code, what stopped it, and what
-would work if it is ever resumed. Companion to `docs/01-decompilation-findings.md`
-(which covers the static pass); this file covers the dynamic one.
+Date: 2026-11-22 (first expedition), 2026-11-23 (write-up), 2026-11-24 (layer 3
+extracted - see the last section). Scope: unpacking `original\wmode.bwl` down to
+the real W-MODE code. Companion to `docs/01-decompilation-findings.md` (the static
+pass); this file covers the dynamic one.
 
 ## Why reverse it at all
 
@@ -15,12 +15,12 @@ own `Window Mode` registry path, BWAPI's code), which is what made stopping rati
 
 ## The onion
 
-| layer | what it is | status |
-|-------|------------|--------|
-| 0 | `wmode.bwl` the file: PE image plus an appended XMOD2 metadata tail (markers `XHDR`/`XMODPR`, keys `NAME`/`DESC`/`VER`/`AUTH`/`TIME`/`COMP`/`URL` in `decomp\wmode.dll.strings`) | input |
-| 1 | PE stub, exactly one function (`entry` @ `0x100062e0`): LZ-decompresses a blob at `0x10005000` over `0x10001000`, rebuilds a manual IAT, scrubs packer flags in the PE header, jumps into the unpacked image | decompiled, `decomp\wmode.dll.c` (see docs/01) |
-| 2 | "XeN'z XMOD loader stub for BWL": a generic BWL4 loader, nothing W-MODE-specific. 44 functions, exports `ApplyPatch` (RVA `0x1DF8`), `ApplyPatchSuspended` (`0x1DDB`), `GetData` (`0x1C21`), `GetPluginAPI` (`0x1A2E`), `OpenConfig` (`0x1A48`) | dumped (`gproj\wmode-layer2.dll`), decompiled (`decomp\wmode-unpacked.dll.c`) |
-| 3 | the real W-MODE payload (window, hotkeys, wmode.ini, DirectDraw hooks) | never extracted |
+| layer | what it is                                                                                                                                                                                                                                      | status                                                                                                          |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| 0     | `wmode.bwl` the file: PE image plus an appended XMOD2 metadata tail (markers `XHDR`/`XMODPR`, keys `NAME`/`DESC`/`VER`/`AUTH`/`TIME`/`COMP`/`URL` in `decomp\wmode.dll.strings`)                                                                | input                                                                                                           |
+| 1     | PE stub, exactly one function (`entry` @ `0x100062e0`): LZ-decompresses a blob at `0x10005000` over `0x10001000`, rebuilds a manual IAT, scrubs packer flags in the PE header, jumps into the unpacked image                                    | decompiled, `decomp\wmode.dll.c` (see docs/01)                                                                  |
+| 2     | "XeN'z XMOD loader stub for BWL": a generic BWL4 loader, nothing W-MODE-specific. 44 functions, exports `ApplyPatch` (RVA `0x1DF8`), `ApplyPatchSuspended` (`0x1DDB`), `GetData` (`0x1C21`), `GetPluginAPI` (`0x1A2E`), `OpenConfig` (`0x1A48`) | dumped (`gproj\wmode-layer2.dll`), decompiled (`decomp\wmode-unpacked.dll.c`)                                   |
+| 3     | the real W-MODE payload (window, hotkeys, wmode.ini, DirectDraw hooks)                                                                                                                                                                          | **extracted 2026-11-24**: `gproj\dumps\layer3_wmode.bin`, decompiled to `decomp\layer3_wmode.c` (236 functions) |
 
 Concrete packer evidence on the file itself: blank section names, first section
 `VirtualSize 0x4000 / RawSize 0`, entry RVA `0x62E0` inside the stub.
@@ -113,10 +113,93 @@ Debugger choice in one line: x32dbg + ScyllaHide first, WinDbg only if
 loader/kernel-level views are needed, Ghidra Debugger to stay inside the existing
 listing.
 
+## Resolution: layer 3 extracted from the live game (2026-11-24)
+
+The approach that worked was hypothesis 3 from the list above ("dump from the
+game side after a real injection"): let ChaosLauncher and the genuine XMOD
+loader do the unpacking, then read the result out of the game process. Nothing
+was defeated at runtime - the protection is architectural, see the note at the
+end of this section.
+
+Two false leads came first:
+
+- pe-sieve against the running game found nothing suspicious (`Implanted: 0`,
+  73 modules, 701 regions). Not a packer countermeasure: the payload has no PE
+  header in memory, so it does not look like an implanted PE to a scanner built
+  around PE headers.
+- `OpenProcess` on the game failed with error 5 even from an Administrator
+  console. Also not anti-debug: ChaosLauncher starts the game with a raised
+  integrity level, and an Administrator token carries `SeDebugPrivilege`
+  disabled by default. pe-sieve enables it itself; a plain Python ctypes script
+  has to call `AdjustTokenPrivileges` first. After that one call `OpenProcess`
+  with `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ` succeeded - no debugger
+  was attached to the game, no `IsDebuggerPresent`/`CheckRemoteDebuggerPresent`
+  check stood in the way.
+
+On the `DebugActiveProcess` string in layer 2: it belongs to the generic XMOD
+stub and was never exercised here. The loader's obfuscation (XOR keys off the
+PEB, signature-scanned kernel32 addresses, the magic `0x4E4` handshake) protects
+the *loader's own* injection path - it is what stopped the sacrificial-host
+attempt - but it does nothing once the payload is already mapped and running.
+Bypassing it meant not fighting it: the real launcher walked that path for us.
+
+What found it: `gproj\scan_wmode.py` (ctypes, read-only, `PROCESS_QUERY_INFORMATION
+| PROCESS_VM_READ`) walking every committed region looking for the marker strings
+`W-MODE`, `wmode.ini`, `SaveWindowClientX`, `DblSized`, `XMOD`. Two private RWX
+regions outside every module answered, both `0x11000` bytes:
+
+| base         | markers                     | what it is                                                                                  |
+|--------------|-----------------------------|---------------------------------------------------------------------------------------------|
+| `0x001d0000` | `XMOD` + all W-MODE strings | the XMOD loader stub (layer 2) as it sits in the game, with the payload still packed inside |
+| `0x028b0000` | W-MODE strings only         | **layer 3, the real W-MODE**                                                                |
+
+Both are headerless bodies: XMOD maps its images without the MZ/PE headers, so
+the file offsets equal virtual offsets from the allocation base. Code starts at
+`+0x1000` (the executable sub-region), the manual IAT lives at `+0x9200..+0x9D40`
+(KERNEL32/USER32/GDI32/MSVCRT names in plain text, resolved at load), the
+`ddraw.dll`/`dsound.dll` runtime-resolution strings and the `wmode.xmod` /
+`get_wmode_interface` / `scl_entry` export names sit at `+0x9DAC..+0x9DCB`, the
+caption-button bitmaps (the `R`/`J`/`z`/`I`/`Q`/`[` runs) from `+0xA811` on.
+
+Dump with `gproj\dump_region.py` (same privilege dance), then one headless Ghidra
+pass as a raw x86 binary at base `0x028B0000`:
+
+```
+analyzeHeadless gproj layer3 -import gproj\dumps\layer3_wmode.bin -loader BinaryLoader -processor x86:LE:32:default -loader-baseAddr 0x028B0000 -scriptPath scripts -postScript DecompileAll.java decomp\layer3_wmode.c
+```
+
+236 functions, 0 failures. First findings, straight from the decompile:
+
+- `FUN_028b4130` (4405 bytes) is the W-MODE window procedure, installed through
+  `SetPropA` with the property name `WMODE_WND_PROC_PROP` (the strings also name
+  the game's window classes `SWarClass`, `SDlgDialog`, `SDlgStatic`,
+  `StormComboBox`, `StormScrollbar`).
+- The hotkey arm dispatches into one button handler `FUN_028b6dea(button, state)`
+  where the button index is the caption icon: F1 -> 3 (cursor clip), F9 -> 1
+  (doublesize), F10 -> 5 (window move, and only while ALT is already released:
+  `GetKeyState(VK_MENU) < 0` skips it), F11 -> 4 (always on top), F12 -> 6
+  (caption controls). So the readme's hotkeys and the caption icons are one
+  mechanism in the original.
+- The row has eight button slots, not six: 2 has no hotkey, 7 and 8 are gated by
+  a refcount helper (`FUN_028b702a`). Button 7 flips `DAT_028c09d4`, which the
+  WM_MOUSEMOVE path tests together with the "over the frame" state - the
+  original's own cursor-confinement switch.
+- All `WM_NC*BUTTON*` messages (`0xA0..0xA9`) are swallowed, so the caption is
+  entirely custom-drawn (`CreateIconFromResource`, `SetWindowRgn`,
+  `BeginDeferWindowPos`).
+
+Open questions left for a later pass: the exact meaning of buttons 2 and 8, and
+the doublesize implementation (`FUN_028b692b` / `FUN_028b708f`) versus our scale
+ladder.
+
 ## Artifact map
 
 `decomp\` and `gproj\` are gitignored (regenerable); the tools are tracked.
 
+- `scripts\scan-wmode-process.py` and `scripts\dump-region.py` - the live-game
+  route to layer 3 (Administrator console, Python 3, no dependencies). Scan first
+  to find the private region carrying the W-MODE strings, then dump it; the
+  Ghidra command line above turns the dump into `decomp\layer3_wmode.c`.
 - `scripts\decompile-wmode.ps1` - layer 1 pass (reproduces `decomp\wmode.dll.c`,
   `.strings`); `scripts\decompile-storm.ps1` for storm.dll.
 - `src\bin\unpack-wmode.rs` - the host. Reproduces the layer 2 dump: run it, it
