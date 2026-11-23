@@ -43,3 +43,24 @@ Feature-by-feature against `original\WModeReadme.txt`:
 | Mouse resize of the window                                              | none                                       | parity: original has none either (step 13 ruling)                                               |
 | Windows 11 DPI awareness                                                | not declared                               | untested; original predates it                                                                  |
 
+## Reverse-engineering tooling
+
+Requires Ghidra 12.1.4 + JDK 21 installed (auto-detected under `D:\tools`, or pass `-Ghidra`/`-Jdk`;
+the scripts print download instructions when missing). Full story of the layered packing:
+`docs/04-xmod-unpack-expedition.md`.
+
+```powershell
+# layer 1 (the packer stub inside wmode.bwl) and storm.dll
+powershell -ExecutionPolicy Bypass -File scripts\decompile-wmode.ps1    # -> decomp\wmode.dll.c
+powershell -ExecutionPolicy Bypass -File scripts\decompile-storm.ps1    # -> decomp\storm.dll.c
+
+# layer 2 dump (the "XeN'z XMOD loader stub"): the sacrificial host loads
+# wmode.bwl and dumps the unpacked image
+cargo run --release --target i686-pc-windows-msvc --bin unpack-wmode     # -> gproj\wmode-unpacked.dll
+Copy-Item gproj\wmode-unpacked.dll original\wmode-unpacked.dll           # optional convenience copy
+
+# layer 2 decompile: the same headless pattern, pointed at the dump
+& (Get-ChildItem D:\tools\ghidra_*\support\analyzeHeadless.bat)[0] `
+  gproj wmode-unpacked -import gproj\wmode-unpacked.dll `
+  -scriptPath scripts -postScript DecompileAll.java decomp\wmode-unpacked.dll.c
+```
