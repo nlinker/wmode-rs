@@ -50,11 +50,8 @@ static WINDOW_CLIENT_Y: AtomicI32 = AtomicI32::new(-1);
 /// True while we turned the screensaver off and owe a restore.
 static SCREENSAVER_OFF: AtomicBool = AtomicBool::new(false);
 
-/// Shows or hides the arrow cursor. The call saturates the ShowCursor
-/// counter instead of stepping it once: the game keeps hiding the OS
-/// cursor every frame while it draws its own, so a single step loses.
-/// Over the caption (nonclient) the arrow must win, over the client the
-/// game cursor does.
+/// Shows or hides the arrow cursor by saturating the ShowCursor counter:
+/// the game hides the OS cursor every frame while drawing its own.
 fn set_cursor_show(show: bool) {
     let mut count = unsafe { ShowCursor(show as i32) };
     while (show && count < 0) || (!show && count > 0) {
@@ -215,8 +212,7 @@ unsafe fn paint_frame(hwnd: HWND) {
         let off = rgb(90, 90, 90);
         let green = rgb(0, 210, 0);
         let boxbrush = CreateSolidBrush(rgb(35, 35, 35));
-        // every stateful button carries its own on/off color: bright while
-        // its switch is on, dim while off, grey all over while the caption
+        // per-switch colors: bright when on, dim when off, grey when the
         // controls are disabled
         let pen_on = CreatePen(PS_SOLID, 1, green);
         let pen_off = CreatePen(PS_SOLID, 1, off);
@@ -305,10 +301,8 @@ unsafe fn cursor_over_frame(hwnd: HWND) -> bool {
         && !(pt.x >= tl.x && pt.x < br.x && pt.y >= tl.y && pt.y < br.y)
 }
 
-/// Per-frame arrow decision by cursor position. The game re-hides the OS
-/// cursor when it regains focus or enters its screens, so whoever speaks
-/// last wins - this runs at the end of every frame and makes the arrow
-/// over the frame win within one frame.
+/// Per-frame arrow decision by cursor position: the game re-hides the OS
+/// cursor on regaining focus, so the last word must be ours.
 pub fn arrow_frame_check() {
     let hwnd = render::game_hwnd();
     if hwnd.is_null() {
@@ -316,8 +310,7 @@ pub fn arrow_frame_check() {
     }
     let over_frame = unsafe { cursor_over_frame(hwnd) };
     if over_frame {
-        // the game nulls the cursor handle even over our caption, and
-        // ShowCursor cannot fix a nulled handle - set the arrow explicitly
+        // a nulled cursor handle is beyond ShowCursor, set the arrow
         unsafe {
             SetCursor(LoadCursorW(core::ptr::null_mut(), IDC_ARROW));
         }
@@ -400,10 +393,8 @@ unsafe fn remember_client_pos(hwnd: HWND) {
     WINDOW_CLIENT_Y.store(y, Ordering::Relaxed);
 }
 
-/// Exit save for DLL_PROCESS_DETACH: uses the cached client position,
-/// no window queries, the loader lock is held at that point. Also
-/// restores the screensaver if we disabled it, so a game exit cannot
-/// leave it off system-wide.
+/// Exit save for DLL_PROCESS_DETACH: cached position only, no window
+/// queries under the loader lock. Also restores the screensaver.
 pub fn save_cached() {
     unsafe {
         screensaver_restore();
@@ -462,8 +453,7 @@ unsafe extern "system" fn our_wnd_proc(
         remember_client_pos(hwnd);
     }
     if msg == WM_NCCALCSIZE && wparam != 0 && render::windowed() {
-        // carve the custom frame out of the window box: the bar on top,
-        // the border on the other three sides
+        // reserve the bar on top and the border around
         let rct = lparam as *mut RECT;
         (*rct).left += render::FRAME;
         (*rct).top += render::FRAME + render::BAR_H;
@@ -493,8 +483,7 @@ unsafe extern "system" fn our_wnd_proc(
     if msg == WM_NCLBUTTONDOWN {
         let hit = wparam as usize;
         if (HT_BTN_FIRST..HT_BTN_FIRST + BTN_COUNT).contains(&hit) {
-            // like the original: the icons go grey and inert while the
-            // caption controls are off, only the hotkeys keep working
+            // grey and inert while the controls are off, like the original
             if CAPTION_CONTROLS.load(Ordering::Relaxed) {
                 match hit {
                     HT_BTN_CLIP => toggle_clip(hwnd),
@@ -514,16 +503,11 @@ unsafe extern "system" fn our_wnd_proc(
     }
     if msg == WM_ACTIVATE {
         if wparam as u32 & 0xFFFF != WA_INACTIVE {
-            // the system drops ClipCursor confinement when the window
-            // deactivates: bring it back on every activation while the
-            // switch is on, or Alt+Tab leaves the cursor free forever
+            // the system drops the clip on deactivation, bring it back
             cursor::refresh_clip();
-            // the game left the arrow hidden before deactivation and no
-            // NC mouse move will come until the mouse moves: decide the
-            // arrow state from where the cursor sits right now
+            // re-derive the arrow state from the cursor position
             set_cursor_show(unsafe { cursor_over_frame(hwnd) });
-            // the screensaver half of DisableControls: off while the
-            // game window is the foreground one
+            // the screensaver half of DisableControls
             if !CAPTION_CONTROLS.load(Ordering::Relaxed) {
                 screensaver_disable();
             }
@@ -536,8 +520,7 @@ unsafe extern "system" fn our_wnd_proc(
     }
     if msg == WM_SIZE && render::windowed() {
         if render::correct_client_size(hwnd) {
-            // the correction moved or resized the client box the cursor
-            // clip confines to, bring the applied clip back in line
+            // the correction changed the clip box, realign the clip
             cursor::refresh_clip();
         }
     }
@@ -556,9 +539,7 @@ unsafe extern "system" fn our_wnd_proc(
     }
     if msg == WM_ACTIVATEAPP {
         // the game halts its loop when told it deactivated: it always
-        // hears "active" here, so it keeps running unfocused like the
-        // original wmode does (its readme: switching windows does not
-        // pause the game)
+        // hears "active", so it keeps running unfocused like the original
         let old = ORIGINAL_PROC.load(Ordering::Acquire);
         if old != 0 {
             type Proc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
@@ -568,23 +549,19 @@ unsafe extern "system" fn our_wnd_proc(
         return DefWindowProcA(hwnd, msg, 1, 0);
     }
     if msg == WM_SETCURSOR && render::windowed() && unsafe { cursor_over_frame(hwnd) } {
-        // the game's WM_SETCURSOR handling nulls the cursor over the
-        // whole window including our caption: answer for the frame zone
-        // ourselves before it runs
+        // the game nulls the cursor everywhere, answer for the frame zone
         unsafe {
             SetCursor(LoadCursorW(core::ptr::null_mut(), IDC_ARROW));
         }
         return 1;
     }
     if msg == WM_MOUSEMOVE || msg == WM_NCMOUSEMOVE {
-        // decide by geometry, not message flavor: the game captures the
-        // mouse in its menus, and captured moves over the caption arrive
-        // as plain WM_MOUSEMOVE, never as a nonclient message
+        // by geometry, not message flavor: captured moves over the
+        // caption arrive as plain WM_MOUSEMOVE
         set_cursor_show(unsafe { cursor_over_frame(hwnd) });
     }
-    // mouse messages carry client pixels: rescale them to game units
-    // while the client is not the game size (the scale cycle). Wheel
-    // messages carry screen coordinates and stay untouched.
+    // rescale client pixels to game units while scaled, the wheel is
+    // screen space and stays untouched
     if render::windowed()
         && msg >= WM_MOUSEFIRST
         && msg <= WM_MOUSELAST

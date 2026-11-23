@@ -253,15 +253,13 @@ pub unsafe fn set_client_size(hwnd: HWND, cw: i32, ch: i32) {
     SetWindowPos(hwnd, core::ptr::null_mut(), x, y, ow, oh, SWP_NOZORDER);
 }
 
-/// Restores the client area to the scaled target size. The game (or
-/// storm) keeps sizing the window to an outer 640x480, which the window
-/// frame eats into, so every WM_SIZE snaps the outer size back to the
-/// wanted client plus frame. Returns true when a correction ran, false
-/// when the client already matched or the window is minimized or gone.
+/// Restores the client area to the scaled target size: storm keeps
+/// sizing the window to an outer 640x480, so every WM_SIZE snaps the
+/// outer size back to wanted client plus frame. Skips minimized windows
+/// (stub geometry). Returns true when a correction ran.
 pub unsafe fn correct_client_size(hwnd: HWND) -> bool {
     if IsIconic(hwnd) != 0 {
-        // a minimized window carries stub geometry (client 1232x26 at
-        // -32000), correcting it would resize the parked placeholder
+        // correcting the parked placeholder would resize it
         return false;
     }
     let (want_w, want_h) = crate::scale::client_wanted();

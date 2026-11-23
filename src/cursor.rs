@@ -43,10 +43,8 @@ struct Map {
     oy: i32,
 }
 
-/// Collects the translation snapshot, or None while the window does not
-/// exist yet, is minimized (Windows parks it at -32000 with a stub
-/// geometry whose ClientToScreen lands far off screen) or windowed mode
-/// is off (calls then pass through unchanged).
+/// Translation snapshot, or None while the window does not exist, is
+/// minimized (stub geometry at -32000) or windowed mode is off.
 unsafe fn mapping() -> Option<Map> {
     if !render::windowed() {
         return None;
@@ -115,9 +113,7 @@ unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
         return res;
     }
     let Some(m) = mapping() else {
-        // windowed but minimized: the game keeps polling, feed it the
-        // center like the unfocused branch below instead of raw screen
-        // coordinates from the stub geometry
+        // minimized: feed the center, not stub-geometry screen coordinates
         if render::windowed() {
             let (gw, gh) = render::game_size();
             if gw > 0 && gh > 0 {
@@ -128,18 +124,16 @@ unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
         return res;
     };
     let focused = GetForegroundWindow() == m.hwnd;
-    // a focused game sees the real cursor, clamped to the game rect so
-    // edge scrolling never stalls. An unfocused game always sees the
-    // center: it keeps polling this position while deactivated, and a
-    // stray mouse over or away from the window must not scroll its map.
-    // Clicks still land: the click that raises the window focuses it
+    // focused: the real cursor scaled to game units and clamped, so edge
+    // scroll never stalls. Unfocused: always the center - the game keeps
+    // polling while deactivated and a stray mouse must not scroll its
+    // map. Clicks still land: the raising click focuses the window
     // before the button message is delivered.
     if focused {
         ScreenToClient(m.hwnd, point);
         (*point).x = (*point).x * m.gw / m.cw;
         (*point).y = (*point).y * m.gh / m.ch;
-        // the game scrolls when the cursor reaches the edge of its rect:
-        // clamp anything outside so edge scroll never stalls
+        // clamp anything outside the game rect
         (*point).x = (*point).x.clamp(0, m.gw - 1);
         (*point).y = (*point).y.clamp(0, m.gh - 1);
     } else {
@@ -152,14 +146,12 @@ unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
 unsafe extern "system" fn set_cursor_pos(x: i32, y: i32) -> BOOL {
     if render::windowed() {
         let Some(m) = mapping() else {
-            // windowed but the client is not measurable right now (minimized
-            // or mid-restore): swallow the call, passing raw game coordinates
-            // through would warp the physical cursor to the screen origin
+            // unmeasurable client (minimized, mid-restore): passing raw
+            // game coordinates through would warp to the screen origin
             return TRUE;
         };
-        // an unfocused game must not move the physical cursor: it keeps
-        // recentering while deactivated and would yank the user's mouse
-        // out of whatever application holds the focus
+        // an unfocused game keeps recentering and would yank the mouse
+        // out of the focused application
         if GetForegroundWindow() != m.hwnd {
             return TRUE;
         }
@@ -177,9 +169,8 @@ unsafe extern "system" fn clip_cursor(rect: *const RECT) -> BOOL {
     if !render::windowed() {
         return real_clip(rect);
     }
-    // while windowed the clip is ours: game requests are swallowed and
-    // only the switch state decides, so the visible state always equals
-    // the flag (plus the ALT inversion), whatever the game asks for
+    // windowed: game clip requests are swallowed, the ALT+F1 switch
+    // alone decides
     TRUE
 }
 

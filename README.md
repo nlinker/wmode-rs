@@ -1,6 +1,6 @@
 # wmode-rs
 
-Rust rewrite of W-MODE v1.02 (XeNotRoN, 2008) — windowed-mode plugin for StarCraft: Brood War 1.16.1. Loads as a ChaosLauncher (BWL4) plugin. New: ALT+F9 cycles scale 1x → 1.5x → 2x instead of toggling 2x.
+Rust rewrite of W-MODE v1.02 (XeNotRoN, 2008) — windowed-mode plugin for StarCraft: Brood War 1.16.1. Loads as a ChaosLauncher (BWL4) plugin. Differences from the original: window scale ladder ALT+- / ALT+= (1.0-2.0, ALT+F9 resets) instead of the doublesize toggle, and a custom narrow black caption with clickable state buttons.
 
 ```
 original\   original third-party drop (wmode.bwl, WModeReadme.txt) - untouched
@@ -45,9 +45,10 @@ Feature-by-feature against `original\WModeReadme.txt`:
 | ALT+F12 caption controls + ALT+F4 block + screensaver off while focused | steps 9, 13                                | done                                                                                            |
 | ALT+F9 doublesize                                                       | scale ladder ALT+-/ALT+=/ALT+F9 [1.0..2.0] | declared project difference                                                                     |
 | Sound mutes when unfocused                                              | unchanged (OS-level)                       | parity with v1.02, see docs/03                                                                  |
-| Caption icon buttons (clickable, grey with controls off)                | not implemented                            | open item, optional                                                                             |
+| Caption icon buttons (clickable, grey with controls off)                | custom caption, step 16                     | done: narrow black bar, red frame, state buttons, click = toggle                                |
 | Mouse resize of the window                                              | none                                       | parity: original has none either (step 13 ruling)                                               |
 | Windows 11 DPI awareness                                                | not declared                               | untested; original predates it                                                                  |
+| Cursor over the caption                                                 | position-based arrow logic, step 16         | done: survives Alt+Tab, game focus switches and mouse capture                                   |
 
 ## Reverse-engineering tooling
 

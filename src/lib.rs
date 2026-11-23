@@ -46,14 +46,12 @@ const GAME_STORM_ORDINALS: &[(u16, &str)] = &[
 const GAME_USER32_IMPORTS: &[&str] = &["GetCursorPos", "SetCursorPos", "ClipCursor"];
 
 /// DLL entry point. Only inside the game process: disables thread
-/// notifications and spawns the init thread. The launcher loads this DLL
-/// into itself too, where it must stay dormant. Loader-lock rule: nothing
-/// else runs here, the spawned thread starts once DllMain has returned.
-/// One deliberate exception: on process detach the window state is saved
-/// into wmode.ini - the game exits via ExitProcess and delivers neither
-/// WM_CLOSE nor WM_DESTROY, so DLL_PROCESS_DETACH is the only exit
-/// notification an injected DLL ever sees. The save touches the file
-/// system and cached statics only, no window queries.
+/// notifications and spawns the init thread (loader-lock rule: nothing
+/// else runs here). The launcher's own copy stays dormant. One
+/// deliberate exception: on process detach the window state is saved
+/// into wmode.ini - the game exits via ExitProcess, so detach is the
+/// only exit notification, and the save touches only the file system
+/// and cached statics.
 #[no_mangle]
 pub extern "system" fn DllMain(
     hinst: HINSTANCE,

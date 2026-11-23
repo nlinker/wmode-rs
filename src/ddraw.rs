@@ -314,10 +314,9 @@ pub fn replace_storm_ddraw_object(storm_fn_addr: u32) -> bool {
 }
 
 /// The LoadLibraryA replacement in storm.dll's import table. Every library
-/// storm loads gets its own GetProcAddress import redirected to the same
+/// storm loads gets its GetProcAddress import redirected to the same
 /// wrapper, so runtime DirectDraw resolutions inside those libraries
-/// (smackw32.dll plays the intro movies through DirectDraw, the source of
-/// the fullscreen mode flips) receive the fake object too.
+/// (smackw32 plays the intro movies through it) receive the fake too.
 unsafe extern "system" fn load_library_a(file_name: PCSTR) -> HMODULE {
     type LoadFn = unsafe extern "system" fn(PCSTR) -> HMODULE;
     let real = LOADLIB_OLD.load(Ordering::Acquire);
@@ -403,10 +402,9 @@ pub fn install() -> bool {
 }
 
 // --- display-mode guard -----------------------------------------------------
-// Whatever path resolves DirectDraw (storm may cache it in its own module
-// init, before any of our hooks), the actual mode flip ends in ddraw.dll
-// calling ChangeDisplaySettingsEx. Once draw.dll is loaded we patch that
-// import: the request is logged and answered with success, so the desktop
+// Whatever path resolves DirectDraw, the mode flip ends in ddraw.dll
+// calling ChangeDisplaySettings*. Once ddraw is loaded we patch those
+// imports: requests are logged and answered with success, the desktop
 // mode never changes.
 
 static MODE_GUARD_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
