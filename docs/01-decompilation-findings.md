@@ -36,6 +36,8 @@ So the actual W-MODE logic (hotkeys, DirectDraw hooks, window management) lives 
 | Static unpack     | Medium | Reimplement the bit-oriented LZ loop from `entry` in Python, feed it bytes at `0x10005000`.                                                                                  |
 | **Skip (chosen)** | None   | The Rust rewrite does not need the original's internals — see below.                                                                                                         |
 
+The runtime-dump route was later attempted and got two layers deep before being shelved; see `docs/04-xmod-unpack-expedition.md`.
+
 ## BWAPI's WMode.cpp/h as the behavioral reference
 
 `WMode.{h,cpp}` in the BWAPI source tree (`bwapi/BWAPI/Source/`, in the workspace checkout; read in full) is BWAPI's clean-room in-process W-Mode. Key architecture, directly reusable for the Rust plugin:
