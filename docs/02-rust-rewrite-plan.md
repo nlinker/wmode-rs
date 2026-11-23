@@ -251,17 +251,19 @@ starts only after the review verdict — never auto-advance.
   outside ("it will be actually activated only when you move the cursor back"). We re-apply
   the clip immediately, so the cursor is pulled back inside by the system. Deferred-activation
   machinery was tried and dropped as non-obvious behavior.
-- **Sound on focus loss (no deviation)**: the v1.02 readme admits in its known limitations
-  that all game sound mutes when switching to another window. Our windowed storm path
-  behaves the same (DSSCL_NORMAL buffers are silenced by DirectSound on deactivation), so
-  this is parity, not a bug. A COM wrapper intercepting DirectSoundCreate to OR
-  DSBCAPS_GLOBALFOCUS into secondary buffer descriptions was tried and crashed twice
-  (garbage call into SC/smack code paths); reverted, and the MuteNotFocused ini extension
-  was dropped with it as redundant under OS muting.
 - **Toolchain**: MSVC link target for x86 — needs VS BuildTools x86 libs installed; fallback
   `i686-pc-windows-gnu` if not.
 - **Calling conventions**: everything `extern "system"`; storm hooks are `__stdcall` (`system`
   on x86 == stdcall). Structure layouts `#[repr(C)]`.
+
+## Sound on focus loss
+
+The game sound mutes when the window is unfocused. This is parity with upstream v1.02 (its
+readme admits it in known limitations), not a regression. A workaround attempt (COM wrapper
+granting DSBCAPS_GLOBALFOCUS via the GetProcAddress interception) crashed three times and
+was reverted; full account with logs, addresses and retry advice lives in
+`docs/03-sound-focus-loss-postmortem.md`. The MuteNotFocused ini extension was dropped as
+redundant under OS muting.
 
 ## Build & deploy
 
