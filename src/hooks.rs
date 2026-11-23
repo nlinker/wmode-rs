@@ -55,9 +55,6 @@ unsafe extern "system" fn sdraw_unlock(
     a3: i32,
     rect: *mut RECT,
 ) -> BOOL {
-    // every frame passes here: an ALT release with no other event still
-    // gets its cursor clip change applied within one frame
-    crate::cursor::poll_alt();
     if render::unlock() {
         return TRUE;
     }

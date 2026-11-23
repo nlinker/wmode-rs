@@ -290,7 +290,7 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
                 }
             }
             scale::apply_current(hwnd);
-            cursor::apply_switch();
+            cursor::refresh_clip();
             return 0;
         }
         Sleep(WINDOW_POLL_MS);

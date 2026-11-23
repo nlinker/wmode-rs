@@ -4,13 +4,12 @@
 //! still owned the whole screen, so the three user32 imports it calls get
 //! patched in the game executable and remapped onto the window.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_MENU};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ClipCursor, GetClientRect, GetCursorPos, GetForegroundWindow, SetCursorPos,
 };
@@ -29,8 +28,13 @@ static CLIP_OLD: AtomicU32 = AtomicU32::new(0);
 /// User switch for cursor clipping, the ALT+F1 state. Default off, per
 /// the sample ini.
 static CLIP_ENABLED: AtomicBool = AtomicBool::new(false);
-/// Last observed physical ALT state, to spot changes.
-static ALT_WAS_DOWN: AtomicBool = AtomicBool::new(false);
+/// Diagnostic mouse log: how many samples are left before it goes quiet.
+static MOUSE_LOG_BUDGET: AtomicU32 = AtomicU32::new(400);
+/// Total GetCursorPos calls seen, for sampling the log.
+static MOUSE_CALLS: AtomicU32 = AtomicU32::new(0);
+/// Last logged screen position, to skip samples where nothing moved.
+static MOUSE_X: AtomicI32 = AtomicI32::new(i32::MIN);
+static MOUSE_Y: AtomicI32 = AtomicI32::new(i32::MIN);
 
 /// Window geometry needed for translation, all in one snapshot.
 struct Map {
@@ -118,14 +122,15 @@ unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
     let Some(m) = mapping() else {
         return res;
     };
+    let (sx, sy) = ((*point).x, (*point).y);
+    let focused = GetForegroundWindow() == m.hwnd;
     // a focused game sees the real cursor, clamped to the game rect so
     // edge scrolling never stalls. An unfocused game always sees the
     // center: it keeps polling this position while deactivated, and a
     // stray mouse over or away from the window must not scroll its map.
     // Clicks still land: the click that raises the window focuses it
-    // before the button message is delivered. Holding ALT forces the
-    // real position through.
-    if alt_down() || GetForegroundWindow() == m.hwnd {
+    // before the button message is delivered.
+    if focused {
         ScreenToClient(m.hwnd, point);
         (*point).x = (*point).x * m.gw / m.cw;
         (*point).y = (*point).y * m.gh / m.ch;
@@ -137,7 +142,36 @@ unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
         (*point).x = m.gw / 2;
         (*point).y = m.gh / 2;
     }
+    debug_mouse(&m, sx, sy, (*point).x, (*point).y, focused);
     TRUE
+}
+
+/// Diagnostic sample: screen position (absolute), position relative to
+/// the StarCraft client area, and the game coordinates the hook handed
+/// out. The game polls every frame, so only every 8th changed position
+/// gets logged, until the budget runs out.
+fn debug_mouse(m: &Map, sx: i32, sy: i32, gx: i32, gy: i32, focused: bool) {
+    let calls = MOUSE_CALLS.fetch_add(1, Ordering::Relaxed);
+    if MOUSE_X.load(Ordering::Relaxed) == sx && MOUSE_Y.load(Ordering::Relaxed) == sy {
+        return;
+    }
+    MOUSE_X.store(sx, Ordering::Relaxed);
+    MOUSE_Y.store(sy, Ordering::Relaxed);
+    if calls % 8 != 0 {
+        return;
+    }
+    let budget = MOUSE_LOG_BUDGET.fetch_sub(1, Ordering::Relaxed);
+    if budget == 0 {
+        MOUSE_LOG_BUDGET.store(0, Ordering::Relaxed);
+        return;
+    }
+    log(&format!(
+        "mouse: screen ({sx},{sy}) client ({},{}) game ({gx},{gy}) fg={} clip={}",
+        sx - m.ox,
+        sy - m.oy,
+        focused as u8,
+        clip_enabled()
+    ));
 }
 
 unsafe extern "system" fn set_cursor_pos(x: i32, y: i32) -> BOOL {
@@ -171,36 +205,9 @@ pub fn set_clip_enabled(on: bool) {
     CLIP_ENABLED.store(on, Ordering::Relaxed);
 }
 
-/// Physical ALT state right now. Key events cannot be trusted here:
-/// the game swallows some ALT keyups and a remembered state sticks.
-fn alt_down() -> bool {
-    (unsafe { GetAsyncKeyState(VK_MENU as i32) } as u16) & 0x8000 != 0
-}
-
-/// The clip applies only with the switch on and ALT not held: holding
-/// ALT inverts the switch for as long as it is physically down.
-fn clip_active() -> bool {
-    CLIP_ENABLED.load(Ordering::Relaxed) != alt_down()
-}
-
-/// Brings the applied clip back in line when the physical ALT state
-/// changed since the last look.
-pub fn poll_alt() {
-    let down = alt_down();
-    if ALT_WAS_DOWN.swap(down, Ordering::Relaxed) != down {
-        refresh_clip();
-    }
-}
-
 /// Brings the cursor clip in line with the current switch state:
 /// confines the cursor to the game client area, or frees it.
 pub fn refresh_clip() {
-    apply_state(clip_active());
-}
-
-/// Applies the switch directly, ignoring the ALT inversion: the ALT+F1
-/// toggle must land immediately, not after the keys are released.
-pub fn apply_switch() {
     apply_state(CLIP_ENABLED.load(Ordering::Relaxed));
 }
 
@@ -209,14 +216,20 @@ fn apply_state(confine: bool) {
     unsafe {
         match (confine, m) {
             (true, Some(m)) => {
-                real_clip(&RECT {
+                let rect = RECT {
                     left: m.ox,
                     top: m.oy,
                     right: m.ox + m.cw,
                     bottom: m.oy + m.ch,
-                });
+                };
+                log(&format!(
+                    "clip: confined to ({},{})-({},{})",
+                    rect.left, rect.top, rect.right, rect.bottom
+                ));
+                real_clip(&rect);
             }
             _ => {
+                log("clip: released");
                 real_clip(core::ptr::null());
             }
         }

@@ -60,7 +60,7 @@ fn apply(hwnd: HWND) {
     unsafe {
         render::set_client_size(hwnd, cw, ch);
     }
-    cursor::apply_switch();
+    cursor::refresh_clip();
     log(&format!("hotkey: scale {} client {cw}x{ch}", current()));
 }
 

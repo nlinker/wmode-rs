@@ -12,7 +12,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcA, DefWindowProcA, EnableMenuItem, GetSystemMenu, SetWindowLongA, SetWindowPos,
     GWL_WNDPROC, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HWND_NOTOPMOST, HWND_TOPMOST,
     MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SWP_NOMOVE,
-    ShowCursor, SWP_NOSIZE, WM_ACTIVATEAPP, WM_DISPLAYCHANGE, WM_MOUSEFIRST,
+    ShowCursor, SWP_NOSIZE, WM_ACTIVATE, WM_ACTIVATEAPP, WA_INACTIVE, WM_DISPLAYCHANGE,
+    WM_MOUSEFIRST,
     WM_MOUSELAST, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCLBUTTONDOWN, WM_NCMOUSEMOVE,
     WM_PAINT, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
 };
@@ -168,6 +169,12 @@ unsafe extern "system" fn our_wnd_proc(
     if msg == WM_MOVE {
         remember_client_pos(hwnd);
     }
+    if msg == WM_ACTIVATE && wparam as u32 & 0xFFFF != WA_INACTIVE {
+        // the system drops ClipCursor confinement when the window
+        // deactivates: bring it back on every activation while the
+        // switch is on, or Alt+Tab leaves the cursor free forever
+        cursor::refresh_clip();
+    }
     if msg == WM_PAINT && render::windowed() {
         render::paint(hwnd);
     }
@@ -187,7 +194,7 @@ unsafe extern "system" fn our_wnd_proc(
             VK_F1 => {
                 let on = !cursor::clip_enabled();
                 cursor::set_clip_enabled(on);
-                cursor::apply_switch();
+                cursor::refresh_clip();
                 log(&format!("hotkey: ALT+F1 cursor clip {}", if on { "ON" } else { "OFF" }));
             }
             VK_F10 => {
