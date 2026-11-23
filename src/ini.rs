@@ -64,10 +64,7 @@ Scale=1\r\n\
 ; Limit the maximum frame/sec to reach better performance.\r\n\
 ; Default and recommended value: 100\r\n\
 ; Minimum value: 30\r\n\
-MaxFps=100\r\n\
-; Mute all sound when the main window loses focus.\r\n\
-; Default value: 0\r\n\
-MuteNotFocused=0\r\n";
+MaxFps=100\r\n";
 
 /// Full path of wmode.ini in the StarCraft directory.
 pub fn ini_path() -> Option<String> {
@@ -92,7 +89,6 @@ pub struct Config {
     pub always_on_top: bool,
     pub disable_controls: bool,
     pub max_fps: i32,
-    pub mute_not_focused: bool,
     pub scale: f32,
 }
 
@@ -112,7 +108,6 @@ fn default_config() -> Config {
         always_on_top: false,
         disable_controls: false,
         max_fps: 100,
-        mute_not_focused: false,
         scale: 1.0,
     }
 }
@@ -150,7 +145,6 @@ pub fn read_config() -> Option<Config> {
             "alwaysontop" => cfg.always_on_top = on,
             "disablecontrols" => cfg.disable_controls = on,
             "maxfps" => cfg.max_fps = num,
-            "mutenotfocused" => cfg.mute_not_focused = on,
             "scale" => cfg.scale = val.trim().parse().unwrap_or(1.0),
             _ => {}
         }

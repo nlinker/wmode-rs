@@ -12,7 +12,7 @@ use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_MENU};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ClipCursor, GetClientRect, GetCursorPos, SetCursorPos,
+    ClipCursor, GetClientRect, GetCursorPos, GetForegroundWindow, SetCursorPos,
 };
 
 use crate::iat;
@@ -115,10 +115,27 @@ unsafe extern "system" fn get_cursor_pos(point: *mut POINT) -> BOOL {
     if res == FALSE || point.is_null() {
         return res;
     }
-    if let Some(m) = mapping() {
+    let Some(m) = mapping() else {
+        return res;
+    };
+    // a focused game sees the real cursor, clamped to the game rect so
+    // edge scrolling never stalls. An unfocused game always sees the
+    // center: it keeps polling this position while deactivated, and a
+    // stray mouse over or away from the window must not scroll its map.
+    // Clicks still land: the click that raises the window focuses it
+    // before the button message is delivered. Holding ALT forces the
+    // real position through.
+    if alt_down() || GetForegroundWindow() == m.hwnd {
         ScreenToClient(m.hwnd, point);
         (*point).x = (*point).x * m.gw / m.cw;
         (*point).y = (*point).y * m.gh / m.ch;
+        // the game scrolls when the cursor reaches the edge of its rect:
+        // clamp anything outside so edge scroll never stalls
+        (*point).x = (*point).x.clamp(0, m.gw - 1);
+        (*point).y = (*point).y.clamp(0, m.gh - 1);
+    } else {
+        (*point).x = m.gw / 2;
+        (*point).y = m.gh / 2;
     }
     TRUE
 }

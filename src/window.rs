@@ -12,7 +12,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcA, DefWindowProcA, EnableMenuItem, GetSystemMenu, SetWindowLongA, SetWindowPos,
     GWL_WNDPROC, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HWND_NOTOPMOST, HWND_TOPMOST,
     MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SWP_NOMOVE,
-    ShowCursor, SWP_NOSIZE, WM_DISPLAYCHANGE, WM_MOUSEFIRST,
+    ShowCursor, SWP_NOSIZE, WM_ACTIVATEAPP, WM_DISPLAYCHANGE, WM_MOUSEFIRST,
     WM_MOUSELAST, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCLBUTTONDOWN, WM_NCMOUSEMOVE,
     WM_PAINT, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
 };
@@ -212,6 +212,19 @@ unsafe extern "system" fn our_wnd_proc(
             }
             _ => {}
         }
+    }
+    if msg == WM_ACTIVATEAPP {
+        // the game halts its loop when told it deactivated: it always
+        // hears "active" here, so it keeps running unfocused like the
+        // original wmode does (its readme: switching windows does not
+        // pause the game)
+        let old = ORIGINAL_PROC.load(Ordering::Acquire);
+        if old != 0 {
+            type Proc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+            let prev: Proc = core::mem::transmute::<usize, Proc>(old as usize);
+            return CallWindowProcA(Some(prev), hwnd, msg, 1, 0);
+        }
+        return DefWindowProcA(hwnd, msg, 1, 0);
     }
     if msg == WM_NCMOUSEMOVE {
         set_cursor_show(true);

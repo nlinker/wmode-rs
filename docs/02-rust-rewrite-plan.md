@@ -109,7 +109,7 @@ starts only after the review verdict — never auto-advance.
 | 9  | hotkeys ALT+F1 / F10 / F11 / F12 per readme                                                                    | each hotkey toggles its feature; log line per toggle                                    |
 | 10 | `scale.rs` ALT+F9 cycle + `StretchDIBits` HALFTONE branch + resize/border math                                 | 1x → 1.5x → 2x cycle renders and input stays correct                                    |
 | 11 | `ini.rs`: read full key set on start, save-on-exit semantics (`Save*` keys)                                    | config parity with readme table                                                         |
-| 12 | `MaxFps` throttle on the unlock→repaint path + `MuteNotFocused`                                                | fps cap observable; sound mutes on focus loss                                           |
+| 12 | `MaxFps` throttle on the unlock→repaint path                                                                   | fps cap observable                                                                       |
 | 13 | `WM_SIZING` min-size/snap, `DisableControls` extras (ALT+F4 block, screensaver), desktop clamp                 | manual checklist clean vs original                                                      |
 | 14 | `scripts\deploy.ps1` (build + copy `.bwl` into ChaosLauncher Plugins) + final parity checklist                 | one-command deploy; checklist signed off                                                |
 
@@ -221,6 +221,22 @@ starts only after the review verdict — never auto-advance.
   once per frame from the SDrawUnlockSurface hook. The ALT+F1 toggle itself applies
   the switch directly, ignoring the inversion, so it lands the moment it is pressed.
 
+- Step 11: config parsing is byte-level and case-insensitive; unknown keys and
+  comment lines survive both parsing and saving. The original's compact ini
+  (with its DblSized keys) is read and rewritten in place, coexistence verified.
+- Step 11: the exit save rides DLL_PROCESS_DETACH. The game exits via
+  ExitProcess and delivers neither WM_CLOSE nor WM_DESTROY (verified in the
+  log), so process detach is the only exit notification an injected DLL sees -
+  the original must rely on it too. The client position is cached into atomics
+  on every WM_MOVE (minimized windows report -32000 and are ignored), and the
+  detach save touches only the file system and those statics, no window
+  queries under the loader lock. A save-on-every-change variant was tried and
+  reverted by user ruling: saving happens strictly at exit.
+- Step 11: over the caption and frame the system arrow is shown again
+  (WM_NCMOUSEMOVE shows, WM_MOUSEMOVE hides, one ShowCursor call per state
+  change), because the game hides the OS cursor and draws its own only inside
+  the client.
+
 ## Risks / open questions
 
 - **BWAPI interplay**: BWAPI's own W-Mode detects Xen W-Mode via `WS_SYSMENU` in the window
@@ -235,6 +251,13 @@ starts only after the review verdict — never auto-advance.
   outside ("it will be actually activated only when you move the cursor back"). We re-apply
   the clip immediately, so the cursor is pulled back inside by the system. Deferred-activation
   machinery was tried and dropped as non-obvious behavior.
+- **Sound on focus loss (no deviation)**: the v1.02 readme admits in its known limitations
+  that all game sound mutes when switching to another window. Our windowed storm path
+  behaves the same (DSSCL_NORMAL buffers are silenced by DirectSound on deactivation), so
+  this is parity, not a bug. A COM wrapper intercepting DirectSoundCreate to OR
+  DSBCAPS_GLOBALFOCUS into secondary buffer descriptions was tried and crashed twice
+  (garbage call into SC/smack code paths); reverted, and the MuteNotFocused ini extension
+  was dropped with it as redundant under OS muting.
 - **Toolchain**: MSVC link target for x86 — needs VS BuildTools x86 libs installed; fallback
   `i686-pc-windows-gnu` if not.
 - **Calling conventions**: everything `extern "system"`; storm hooks are `__stdcall` (`system`

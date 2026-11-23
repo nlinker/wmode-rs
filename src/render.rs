@@ -50,8 +50,15 @@ static DIRTY: AtomicBool = AtomicBool::new(false);
 static LAST_PAINT_TICK: AtomicU32 = AtomicU32::new(0);
 /// How many client-size corrections get logged before going quiet.
 static CORRECT_LOG_BUDGET: AtomicU32 = AtomicU32::new(10);
-/// Minimum milliseconds between repaints.
-const PAINT_INTERVAL_MS: u32 = 20;
+/// Minimum milliseconds between repaints, from the MaxFps ini key.
+static PAINT_INTERVAL_MS: AtomicU32 = AtomicU32::new(10);
+
+/// Sets the repaint throttle from a MaxFps value, clamped to at least
+/// 30 fps per the template note.
+pub fn set_max_fps(fps: i32) {
+    let fps = fps.clamp(30, 1000);
+    PAINT_INTERVAL_MS.store(1000 / fps as u32, Ordering::Relaxed);
+}
 
 pub fn windowed() -> bool {
     WINDOWED.load(Ordering::Acquire)
@@ -407,7 +414,7 @@ pub fn paint(hwnd: HWND) {
     }
     let now = unsafe { GetTickCount() };
     let last = LAST_PAINT_TICK.load(Ordering::Relaxed);
-    if now.wrapping_sub(last) < PAINT_INTERVAL_MS {
+    if now.wrapping_sub(last) < PAINT_INTERVAL_MS.load(Ordering::Relaxed) {
         return; // keep dirty, the next unlock re-arms the repaint
     }
     if !DIRTY.swap(false, Ordering::AcqRel) {

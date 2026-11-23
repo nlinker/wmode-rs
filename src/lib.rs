@@ -284,6 +284,7 @@ unsafe extern "system" fn init_thread(_param: *mut core::ffi::c_void) -> u32 {
                 window::apply_config(hwnd, &cfg);
                 cursor::set_clip_enabled(cfg.clip_cursor);
                 scale::set_from_value(cfg.scale);
+                render::set_max_fps(cfg.max_fps);
                 unsafe {
                     render::set_client_origin(hwnd, cfg.window_client_x, cfg.window_client_y);
                 }
