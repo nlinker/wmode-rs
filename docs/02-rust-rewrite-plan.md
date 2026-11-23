@@ -274,6 +274,10 @@ starts only after the review verdict — never auto-advance.
   window is in foreground) via SPI_GET/SETSCREENSAVEACTIVE on activation,
   F12 toggling and process exit, plus the ALT+F4 block and the desktop
   clamp landed earlier.
+- Step 13 (verification): scenario run clean. The screensaver log lines
+  stay silent while the system screensaver is off (SPI_GETSCREENSAVEACTIVE
+  returns 0, nothing to disable or restore) - verifying the guard visibly
+  needs a screensaver enabled in Windows first.
 
 ## Risks / open questions
 
@@ -305,11 +309,32 @@ was reverted; full account with logs, addresses and retry advice lives in
 `docs/03-sound-focus-loss-postmortem.md`. The MuteNotFocused ini extension was dropped as
 redundant under OS muting.
 
+## Parity checklist (step 14)
+
+Feature-by-feature against `original\WModeReadme.txt`:
+
+| readme feature | wmode-rs | status |
+|----------------|----------|--------|
+| ChaosLauncher/BWL4 plugin, name/description/config dialog | bwl.rs exports, steps 1-3 | done |
+| `wmode.ini` full key set, Save* switches, save on exit | ini.rs, step 11 | done |
+| Windowed 8-bpp render, palette, no desktop mode change | render.rs + fake DirectDraw, step 7 | done |
+| `MaxFps` frame cap (default 100, min 30) | unlock-path throttle, step 12 | done |
+| ALT+F1 cursor clip (+ release behavior) | step 9, reworked 12 | done, deviation: immediate re-clip on ALT release vs readme's deferred activation (step 9 note) |
+| ALT+F10 window move toggle | step 9 | done |
+| ALT+F11 always-on-top toggle | step 9 | done |
+| ALT+F12 caption controls + ALT+F4 block + screensaver off while focused | steps 9, 13 | done |
+| ALT+F9 doublesize | scale ladder ALT+-/ALT+=/ALT+F9 [1.0..2.0] | declared project difference |
+| Sound mutes when unfocused | unchanged (OS-level) | parity with v1.02, see docs/03 |
+| Caption icon buttons (clickable, grey with controls off) | not implemented | open item, optional |
+| Mouse resize of the window | none | parity: original has none either (step 13 ruling) |
+| Windows 11 DPI awareness | not declared | untested; original predates it |
+
 ## Build & deploy
 
 ```powershell
 rustup target add i686-pc-windows-msvc
-cargo build --release --target i686-pc-windows-msvc
-Copy-Item target\i686-pc-windows-msvc\release\wmode_rs.dll <ChaosLauncher>\Plugins\wmode-rs.bwl
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1            # build + copy to Plugins
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -ClearLog  # also start a fresh %TEMP% log
 ```
-(plus a `scripts\deploy.ps1` wrapping this — arrives at step 14)
+`deploy.ps1` defaults to `D:\scai\scbw\Chaoslauncher\Plugins` (`-PluginsDir` overrides); the game
+must not be running while deploying, Windows locks a loaded plugin.
