@@ -109,8 +109,8 @@ starts only after the review verdict — never auto-advance.
 | 9  | hotkeys ALT+F1 / F10 / F11 / F12 per readme                                                                    | each hotkey toggles its feature; log line per toggle                                    |
 | 10 | `scale.rs` ALT+F9 cycle + `StretchDIBits` HALFTONE branch + resize/border math                                 | 1x → 1.5x → 2x cycle renders and input stays correct                                    |
 | 11 | `ini.rs`: read full key set on start, save-on-exit semantics (`Save*` keys)                                    | config parity with readme table                                                         |
-| 12 | `MaxFps` throttle on the unlock→repaint path                                                                   | fps cap observable                                                                       |
-| 13 | `WM_SIZING` min-size/snap, `DisableControls` extras (ALT+F4 block, screensaver), desktop clamp                 | manual checklist clean vs original                                                      |
+| 12 | `MaxFps` throttle on the unlock→repaint path                                                                   | fps cap observable                                                                      |
+| 13 | `DisableControls` extras (ALT+F4 block, screensaver), desktop clamp                                            | manual checklist clean vs original                                                      |
 | 14 | `scripts\deploy.ps1` (build + copy `.bwl` into ChaosLauncher Plugins) + final parity checklist                 | one-command deploy; checklist signed off                                                |
 
 ## Step notes (decisions taken during implementation)
@@ -237,12 +237,52 @@ starts only after the review verdict — never auto-advance.
   change), because the game hides the OS cursor and draws its own only inside
   the client.
 
+- Step 12: MaxFps rides the unlock-to-repaint path (tick check, default 100,
+  minimum 30). GetCursorPos became focus-aware per user spec: focused = real
+  position scaled into game units and clamped to the game rect (edge scroll
+  never stalls), unfocused = always the center (the game keeps polling while
+  deactivated and a stray mouse elsewhere must not scroll its map; the click
+  that raises the window focuses it before the button message lands).
+- Step 12 (follow-up commit f05d3a3): the plain-ALT reactions were dropped by
+  user ruling (useless feature). ALT no longer inverts the clip switch and no
+  longer forces real coordinates through GetCursorPos - this supersedes the
+  ALT-inversion notes of steps 9/10, whose per-frame GetAsyncKeyState sync
+  went away with them. apply_switch and refresh_clip merged into one
+  refresh_clip. Diagnostics added: `mouse:` lines sample screen (absolute),
+  client-relative and game coordinates plus focus/clip flags (every 8th
+  changed position, budget 400 lines), `clip:` lines log every confine and
+  release with the rectangle.
+- Step 12 (fix): Windows itself releases ClipCursor confinement when the
+  window deactivates, and nothing restores it on the way back. WM_ACTIVATE
+  now reapplies the clip on every activation while the switch is on - before,
+  Alt+Tab away and back left the cursor free forever with the switch still
+  ON. Log proof: one `clip: confined` at the hotkey, no second one after the
+  Alt+Tab round trip.
+- Step 12 (external finding): "cursor never reaches the window edge"
+  reproduced only with the BWAPI plugin co-injected (BWAPI hooks the same
+  cursor trio and confines to its own rectangle); clean without BWAPI. See
+  the Risks entry.
+
+- Step 13 (ruling): no mouse resize. The original does not allow resizing
+  (the readme documents only the doublesize toggle), so the WM_SIZING
+  min-size/snap machinery - lifted from BWAPI's WMode, where resize is a
+  feature - was removed before commit. The window keeps its size from the
+  scale ladder alone, and correct_client_size already reverts any foreign
+  resize attempt, which is also why free dragging never worked. What step
+  13 ships instead: the screensaver half of DisableControls (readme: while
+  the controls are disabled, the screensaver is off while the StarCraft
+  window is in foreground) via SPI_GET/SETSCREENSAVEACTIVE on activation,
+  F12 toggling and process exit, plus the ALT+F4 block and the desktop
+  clamp landed earlier.
+
 ## Risks / open questions
 
 - **BWAPI interplay**: BWAPI's own W-Mode detects Xen W-Mode via `WS_SYSMENU` in the window
   style and defers (WMode.cpp:420,438,576). Our window style must keep `WS_SYSMENU`
-  (`WS_OVERLAPPEDWINDOW` does) so co-injection with BWAPI stays consistent. If BWAPI's wmode
-  is ON too, behavior undefined — document "don't enable both".
+  (`WS_OVERLAPPEDWINDOW` does) so co-injection with BWAPI stays consistent. Confirmed live:
+  with BWAPI co-injected the physical cursor stops short of the window edge (BWAPI confines
+  and translates through its own hooks, invisible to ours) - clean without BWAPI. Document
+  "don't enable both".
 - **Loader lock**: init strictly on a spawned thread; hooks installed only after window exists.
 - **HALFTONE StretchDIBits cost** at 2x on weak machines — `MaxFps` default 100 covers it.
 - **Windows 11 DPI**: declare DPI-aware via manifest? Original predates it; test raw first.

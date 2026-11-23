@@ -10,10 +10,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcA, DefWindowProcA, EnableMenuItem, GetSystemMenu, SetWindowLongA, SetWindowPos,
-    GWL_WNDPROC, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HWND_NOTOPMOST, HWND_TOPMOST,
-    MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SWP_NOMOVE,
-    ShowCursor, SWP_NOSIZE, WM_ACTIVATE, WM_ACTIVATEAPP, WA_INACTIVE, WM_DISPLAYCHANGE,
-    WM_MOUSEFIRST,
+    SystemParametersInfoA, GWL_WNDPROC, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
+    HWND_NOTOPMOST, HWND_TOPMOST, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, SC_CLOSE, SC_MAXIMIZE,
+    SC_MINIMIZE, SPI_GETSCREENSAVEACTIVE, SPI_SETSCREENSAVEACTIVE, SWP_NOMOVE, ShowCursor,
+    SWP_NOSIZE, WA_INACTIVE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_DISPLAYCHANGE, WM_MOUSEFIRST,
     WM_MOUSELAST, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCLBUTTONDOWN, WM_NCMOUSEMOVE,
     WM_PAINT, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
 };
@@ -41,6 +41,8 @@ static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(true);
 /// in DLL_PROCESS_DETACH where window queries are off limits.
 static WINDOW_CLIENT_X: AtomicI32 = AtomicI32::new(-1);
 static WINDOW_CLIENT_Y: AtomicI32 = AtomicI32::new(-1);
+/// True while we turned the screensaver off and owe a restore.
+static SCREENSAVER_OFF: AtomicBool = AtomicBool::new(false);
 
 /// Shows or hides the arrow cursor, one ShowCursor call per state change.
 fn set_cursor_show(show: bool) {
@@ -76,6 +78,34 @@ unsafe fn apply_caption_controls(hwnd: HWND) {
     EnableMenuItem(menu, SC_CLOSE, flags);
     EnableMenuItem(menu, SC_MAXIMIZE, flags);
     EnableMenuItem(menu, SC_MINIMIZE, flags);
+}
+
+/// Turns the screensaver off, remembering to restore it later. Only used
+/// while the caption controls are disabled, per the readme.
+unsafe fn screensaver_disable() {
+    if SCREENSAVER_OFF.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut active = 0;
+    SystemParametersInfoA(
+        SPI_GETSCREENSAVEACTIVE,
+        0,
+        &mut active as *mut i32 as _,
+        0,
+    );
+    if active != 0 {
+        SystemParametersInfoA(SPI_SETSCREENSAVEACTIVE, 0, core::ptr::null_mut(), 0);
+        SCREENSAVER_OFF.store(true, Ordering::Relaxed);
+        log("window: screensaver disabled");
+    }
+}
+
+/// Restores the screensaver if we are the ones who turned it off.
+unsafe fn screensaver_restore() {
+    if SCREENSAVER_OFF.swap(false, Ordering::Relaxed) {
+        SystemParametersInfoA(SPI_SETSCREENSAVEACTIVE, 1, core::ptr::null_mut(), 0);
+        log("window: screensaver restored");
+    }
 }
 
 /// Applies a loaded ini config to the toggle states and the window.
@@ -114,8 +144,13 @@ unsafe fn remember_client_pos(hwnd: HWND) {
 }
 
 /// Exit save for DLL_PROCESS_DETACH: uses the cached client position,
-/// no window queries, the loader lock is held at that point.
+/// no window queries, the loader lock is held at that point. Also
+/// restores the screensaver if we disabled it, so a game exit cannot
+/// leave it off system-wide.
 pub fn save_cached() {
+    unsafe {
+        screensaver_restore();
+    }
     let ok = crate::ini::save_state(&crate::ini::SaveState {
         client_x: WINDOW_CLIENT_X.load(Ordering::Relaxed),
         client_y: WINDOW_CLIENT_Y.load(Ordering::Relaxed),
@@ -169,11 +204,20 @@ unsafe extern "system" fn our_wnd_proc(
     if msg == WM_MOVE {
         remember_client_pos(hwnd);
     }
-    if msg == WM_ACTIVATE && wparam as u32 & 0xFFFF != WA_INACTIVE {
-        // the system drops ClipCursor confinement when the window
-        // deactivates: bring it back on every activation while the
-        // switch is on, or Alt+Tab leaves the cursor free forever
-        cursor::refresh_clip();
+    if msg == WM_ACTIVATE {
+        if wparam as u32 & 0xFFFF != WA_INACTIVE {
+            // the system drops ClipCursor confinement when the window
+            // deactivates: bring it back on every activation while the
+            // switch is on, or Alt+Tab leaves the cursor free forever
+            cursor::refresh_clip();
+            // the screensaver half of DisableControls: off while the
+            // game window is the foreground one
+            if !CAPTION_CONTROLS.load(Ordering::Relaxed) {
+                screensaver_disable();
+            }
+        } else {
+            screensaver_restore();
+        }
     }
     if msg == WM_PAINT && render::windowed() {
         render::paint(hwnd);
@@ -212,6 +256,11 @@ unsafe extern "system" fn our_wnd_proc(
                 let on = !CAPTION_CONTROLS.load(Ordering::Relaxed);
                 CAPTION_CONTROLS.store(on, Ordering::Relaxed);
                 apply_caption_controls(hwnd);
+                if on {
+                    screensaver_restore();
+                } else {
+                    screensaver_disable();
+                }
                 log(&format!(
                     "hotkey: ALT+F12 caption buttons {}",
                     if on { "ON" } else { "OFF" }
